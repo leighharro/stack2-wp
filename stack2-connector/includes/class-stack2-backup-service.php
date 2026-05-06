@@ -153,9 +153,10 @@ class Stack2_Backup_Service
                     }
 
                     // Build a portable virtual path for Stack2 (forward slashes).
-                    $relative = 'wordpress' . str_replace($wp_root, '', $abs_path);
-                    $relative = str_replace(DIRECTORY_SEPARATOR, '/', $relative);
-                    $relative = ltrim($relative, '/');
+                    // Use substr so the prefix removal is exact and never matches a
+                    // longer path that merely starts with the same characters.
+                    $rel_part = ltrim(str_replace(DIRECTORY_SEPARATOR, '/', substr($abs_path, strlen($wp_root))), '/');
+                    $relative = 'wordpress/' . $rel_part;
 
                     $this->stream_file_chunks(
                         $abs_path,
@@ -205,7 +206,6 @@ class Stack2_Backup_Service
         update_option('stack2_last_backup_id', $backup_id);
         update_option('stack2_last_backup_size', $this->total_bytes);
         update_option('stack2_last_backup_total_chunks', $total_chunks);
-        update_option('stack2_last_backup_checksum', '');
         update_option('stack2_last_backup_type', $backup_type);
         update_option('stack2_last_backup_error', '');
 
