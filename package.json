@@ -1,0 +1,13 @@
+{
+  "name": "stack2-wp-local-dev",
+  "private": true,
+  "scripts": {
+    "wp-env:start": "wp-env start",
+    "wp-env:stop": "wp-env stop",
+    "wp-env:clean": "wp-env clean all",
+    "wp-env:destroy": "wp-env destroy"
+  },
+  "devDependencies": {
+    "@wordpress/env": "^10.14.0"
+  }
+}

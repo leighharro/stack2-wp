@@ -35,6 +35,11 @@ wp-config.php
 # htaccess
 /.htaccess
 
+# Local development artifacts
+node_modules/
+.wp-env/
+docker-volumes/
+
 # All plugins
 #
 # Note: If you wish to whitelist plugins,
