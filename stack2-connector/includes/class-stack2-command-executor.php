@@ -199,8 +199,7 @@ class Stack2_Command_Executor
             'inventory' => null,
             'backup_id' => $result['backup_id'],
             'total_chunks' => $result['total_chunks'],
-            'file_size' => $result['file_size'],
-            'checksum' => $result['checksum'],
+            'total_bytes' => $result['total_bytes'],
             'backup_type' => $result['backup_type'],
         );
     }
