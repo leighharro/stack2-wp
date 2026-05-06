@@ -14,14 +14,21 @@ class Stack2_Plugin
     public const OPTION_LAST_SYNC_AT = 'stack2_last_sync_at';
     public const OPTION_LAST_SYNC_STATUS = 'stack2_last_sync_status';
     public const OPTION_LAST_SYNC_ERROR = 'stack2_last_sync_error';
+    public const OPTION_LAST_BACKUP_AT = 'stack2_last_backup_at';
+    public const OPTION_LAST_BACKUP_STATUS = 'stack2_last_backup_status';
+    public const OPTION_LAST_BACKUP_ID = 'stack2_last_backup_id';
+    public const OPTION_LAST_BACKUP_SIZE = 'stack2_last_backup_size';
+    public const OPTION_LAST_BACKUP_ERROR = 'stack2_last_backup_error';
 
     public const CRON_HOOK_SYNC = 'stack2_sync_inventory_event';
+    public const CRON_HOOK_BACKUP_CLEANUP = 'stack2_backup_cleanup_event';
     private const LOCK_TRANSIENT = 'stack2_sync_lock';
 
     private Stack2_Logger $logger;
     private Stack2_Signature_Service $signature_service;
     private Stack2_Inventory_Collector $inventory_collector;
     private Stack2_Http_Client $http_client;
+    private Stack2_Backup_Service $backup_service;
 
     public function __construct()
     {
@@ -29,12 +36,15 @@ class Stack2_Plugin
         $this->signature_service = new Stack2_Signature_Service();
         $this->inventory_collector = new Stack2_Inventory_Collector();
         $this->http_client = new Stack2_Http_Client($this->signature_service);
+        $this->backup_service = new Stack2_Backup_Service($this->logger);
     }
 
     public function bootstrap(): void
     {
         add_action('rest_api_init', array($this, 'register_rest_controller'));
+        add_action('rest_api_init', array($this, 'register_backup_rest_controller'));
         add_action(self::CRON_HOOK_SYNC, array($this, 'handle_scheduled_sync'), 10, 2);
+        add_action(self::CRON_HOOK_BACKUP_CLEANUP, array($this, 'handle_backup_cleanup'));
         add_filter('cron_schedules', array($this, 'register_cron_schedule'));
 
         new Stack2_Settings_Page($this);
@@ -51,6 +61,7 @@ class Stack2_Plugin
 
         $plugin = new self();
         $plugin->reschedule_cron();
+        $plugin->reschedule_backup_cleanup_cron();
         if ($plugin->has_valid_credentials()) {
             $plugin->schedule_single_sync(10, 'activation', 0);
         }
@@ -59,6 +70,7 @@ class Stack2_Plugin
     public static function on_deactivation(): void
     {
         wp_clear_scheduled_hook(self::CRON_HOOK_SYNC);
+        wp_clear_scheduled_hook(self::CRON_HOOK_BACKUP_CLEANUP);
         delete_transient(self::LOCK_TRANSIENT);
     }
 
@@ -67,12 +79,26 @@ class Stack2_Plugin
         $executor = new Stack2_Command_Executor(
             $this->inventory_collector,
             $this->logger,
-            $this->get_site_id()
+            $this->get_site_id(),
+            $this->backup_service
         );
 
         $controller = new Stack2_REST_Controller(
             $this->signature_service,
             $executor,
+            $this->logger,
+            $this->get_site_id(),
+            $this->get_api_key()
+        );
+
+        $controller->register_routes();
+    }
+
+    public function register_backup_rest_controller(): void
+    {
+        $controller = new Stack2_Backup_REST_Controller(
+            $this->backup_service,
+            $this->signature_service,
             $this->logger,
             $this->get_site_id(),
             $this->get_api_key()
@@ -113,6 +139,18 @@ class Stack2_Plugin
     public function handle_scheduled_sync(int $attempt = 0, string $trigger = 'cron'): void
     {
         $this->sync_inventory($trigger, $attempt);
+    }
+
+    public function reschedule_backup_cleanup_cron(): void
+    {
+        if (!wp_next_scheduled(self::CRON_HOOK_BACKUP_CLEANUP)) {
+            wp_schedule_event(time() + 600, 'hourly', self::CRON_HOOK_BACKUP_CLEANUP);
+        }
+    }
+
+    public function handle_backup_cleanup(): void
+    {
+        $this->backup_service->cleanup_expired();
     }
 
     public function sync_inventory(string $trigger = 'manual', int $attempt = 0): array
