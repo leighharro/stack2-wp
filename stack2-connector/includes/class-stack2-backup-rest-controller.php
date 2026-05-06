@@ -5,17 +5,15 @@ if (!defined('ABSPATH')) {
 }
 
 /**
- * REST controller that exposes read-only backup endpoints:
+ * REST controller that exposes a read-only backup status endpoint:
  *   GET /wp-json/stack2/v1/backup/{backup_id}/status
- *   GET /wp-json/stack2/v1/backup/{backup_id}/chunk/{chunk_index}
  *
- * Both endpoints require the same HMAC signature headers used by the command
- * endpoint.  For GET requests the body is empty, so the body hash is the
- * sha256 of an empty string.
+ * The primary data flow is push-based: the plugin pushes each backup chunk
+ * directly to the Stack2 API as it is generated.  This endpoint lets Stack2
+ * verify the outcome after the backup command completes.
  *
- * Signing message format:
+ * Signing message format (GET, empty body):
  *   GET:/stack2/v1/backup/{backup_id}/status:{timestamp}:{sha256_of_empty_body}
- *   GET:/stack2/v1/backup/{backup_id}/chunk/{chunk_index}:{timestamp}:{sha256_of_empty_body}
  */
 class Stack2_Backup_REST_Controller
 {
@@ -56,24 +54,6 @@ class Stack2_Backup_REST_Controller
                 ),
             ),
         ));
-
-        register_rest_route('stack2/v1', '/backup/(?P<backup_id>' . Stack2_Backup_Service::BACKUP_ID_RAW_REGEX . ')/chunk/(?P<chunk_index>\d+)', array(
-            'methods' => WP_REST_Server::READABLE,
-            'callback' => array($this, 'handle_chunk'),
-            'permission_callback' => '__return_true',
-            'args' => array(
-                'backup_id' => array(
-                    'required' => true,
-                    'type' => 'string',
-                    'pattern' => Stack2_Backup_Service::BACKUP_ID_RAW_REGEX,
-                ),
-                'chunk_index' => array(
-                    'required' => true,
-                    'type' => 'integer',
-                    'minimum' => 0,
-                ),
-            ),
-        ));
     }
 
     /**
@@ -81,50 +61,22 @@ class Stack2_Backup_REST_Controller
      */
     public function handle_status(WP_REST_Request $request): WP_REST_Response
     {
-        $auth = $this->verify_request($request, '/stack2/v1/backup/' . $request->get_param('backup_id') . '/status');
+        $backup_id = (string) $request->get_param('backup_id');
+        $auth = $this->verify_request($request, '/stack2/v1/backup/' . $backup_id . '/status');
         if (is_wp_error($auth)) {
             return $this->error_response($auth);
         }
 
-        $backup_id = (string) $request->get_param('backup_id');
         $status = $this->backup_service->get_status($backup_id);
 
         if ($status === null) {
             return new WP_REST_Response(array(
                 'success' => false,
-                'error' => 'Backup not found or expired.',
+                'error' => 'Backup not found.',
             ), 404);
         }
 
         return new WP_REST_Response(array_merge(array('success' => true), $status), 200);
-    }
-
-    /**
-     * GET /wp-json/stack2/v1/backup/{backup_id}/chunk/{chunk_index}
-     */
-    public function handle_chunk(WP_REST_Request $request): WP_REST_Response
-    {
-        $backup_id = (string) $request->get_param('backup_id');
-        $chunk_index = (int) $request->get_param('chunk_index');
-
-        $auth = $this->verify_request(
-            $request,
-            '/stack2/v1/backup/' . $backup_id . '/chunk/' . $chunk_index
-        );
-        if (is_wp_error($auth)) {
-            return $this->error_response($auth);
-        }
-
-        $chunk = $this->backup_service->get_chunk($backup_id, $chunk_index);
-
-        if ($chunk === null) {
-            return new WP_REST_Response(array(
-                'success' => false,
-                'error' => 'Chunk not found. Backup may have expired or the chunk index is out of range.',
-            ), 404);
-        }
-
-        return new WP_REST_Response(array_merge(array('success' => true), $chunk), 200);
     }
 
     // -------------------------------------------------------------------------
@@ -135,7 +87,7 @@ class Stack2_Backup_REST_Controller
      * Verify HMAC signature headers for a GET request.
      *
      * @param WP_REST_Request $request
-     * @param string          $route_path  e.g. "/stack2/v1/backup/bkp_.../chunk/0"
+     * @param string          $route_path  e.g. "/stack2/v1/backup/bkp_.../status"
      * @return true|WP_Error
      */
     private function verify_request(WP_REST_Request $request, string $route_path)
@@ -167,7 +119,7 @@ class Stack2_Backup_REST_Controller
         // GET requests have no body; use the sha256 of an empty string.
         $message = sprintf('GET:%s:%s:%s', $route_path, $timestamp, self::EMPTY_BODY_HASH);
         if (!$this->signature_service->verify($message, $signature, $this->api_key)) {
-            $this->logger->error('Backup request signature verification failed.', array('route' => $route_path));
+            $this->logger->error('Backup status request signature verification failed.', array('route' => $route_path));
             return new WP_Error('stack2_bad_signature', 'Signature verification failed.', array('status' => 401));
         }
 

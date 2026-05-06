@@ -124,7 +124,7 @@ class Stack2_Settings_Page
                     <th scope="row">Status</th>
                     <td>
                         <?php
-                        if ($last_backup_status === 'ready') {
+                        if ($last_backup_status === 'pushed') {
                             echo '<span style="color:#2e7d32;font-weight:bold;">' . esc_html($last_backup_status) . '</span>';
                         } elseif ($last_backup_status === 'failed') {
                             echo '<span style="color:#c62828;font-weight:bold;">' . esc_html($last_backup_status) . '</span>';

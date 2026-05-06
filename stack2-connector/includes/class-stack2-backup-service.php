@@ -6,8 +6,9 @@ if (!defined('ABSPATH')) {
 
 class Stack2_Backup_Service
 {
-    public const CHUNK_SIZE = 1048576; // 1 MB per chunk
-    public const EXPIRY_SECONDS = 3600; // backups auto-expire after 1 hour
+    public const CHUNK_SIZE = 10485760; // 10 MB per chunk
+    public const EXPIRY_SECONDS = 3600; // orphan files cleaned up after 1 hour
+    public const SQL_BATCH_SIZE = 1000; // rows per SELECT batch when dumping tables
     /** Raw regex fragment (no anchors/delimiters) for backup ID validation. */
     public const BACKUP_ID_RAW_REGEX = 'bkp_[a-f0-9]{32}';
     private const BACKUP_DIR_NAME = 'stack2-backups';
@@ -21,14 +22,23 @@ class Stack2_Backup_Service
     }
 
     /**
-     * Initiate a new backup. Generates a compressed backup file and returns
-     * metadata (backup_id, total_chunks, etc.) so the caller can fetch chunks.
+     * Generate a compressed backup and push each chunk to the Stack2 API.
+     * The temp file is deleted from the server as soon as all chunks are pushed.
      *
-     * @param string $backup_type  "full" | "database" | "files_manifest"
-     * @return array{success:bool,error?:string,backup_id?:string,total_chunks?:int,chunk_size?:int,file_size?:int,checksum?:string,expires_at?:string}
+     * @param string             $backup_type  "full" | "database" | "files_manifest"
+     * @param string             $base_url     Stack2 base URL (e.g. https://app.stack2.au)
+     * @param string             $site_id      Stack2 Site ID
+     * @param string             $api_key      Stack2 API key
+     * @param Stack2_Http_Client $http_client  HTTP client used for pushing chunks
+     * @return array{success:bool,error?:string,backup_id?:string,total_chunks?:int,file_size?:int,checksum?:string,backup_type?:string}
      */
-    public function initiate_backup(string $backup_type = 'full'): array
-    {
+    public function generate_and_push(
+        string $backup_type,
+        string $base_url,
+        string $site_id,
+        string $api_key,
+        Stack2_Http_Client $http_client
+    ): array {
         $allowed_types = array('full', 'database', 'files_manifest');
         if (!in_array($backup_type, $allowed_types, true)) {
             $backup_type = 'full';
@@ -44,8 +54,8 @@ class Stack2_Backup_Service
         } catch (Exception $e) {
             return array('success' => false, 'error' => 'Cannot generate a secure backup ID.');
         }
+
         $backup_file = $backup_dir . '/' . $backup_id . '.gz';
-        $meta_file = $backup_dir . '/' . $backup_id . '.json';
 
         // Allow longer execution for backup generation.
         // phpcs:ignore WordPress.PHP.IniSet.Risky
@@ -61,150 +71,143 @@ class Stack2_Backup_Service
             @unlink($backup_file);
             return array('success' => false, 'error' => 'Backup generation produced an empty file.');
         }
-        $total_chunks = (int) ceil($file_size / self::CHUNK_SIZE);
 
-        $meta = array(
-            'backup_id' => $backup_id,
-            'backup_type' => $backup_type,
-            'status' => 'ready',
-            'file' => $backup_file,
-            'file_size' => $file_size,
-            'chunk_size' => self::CHUNK_SIZE,
-            'total_chunks' => max(1, $total_chunks),
-            'checksum' => hash_file('sha256', $backup_file),
-            'created_at' => gmdate('c'),
-            'expires_at' => gmdate('c', time() + self::EXPIRY_SECONDS),
-        );
+        $file_checksum = hash_file('sha256', $backup_file);
+        $total_chunks = max(1, (int) ceil($file_size / self::CHUNK_SIZE));
 
-        file_put_contents($meta_file, wp_json_encode($meta, JSON_UNESCAPED_SLASHES));
+        // Open file and push each chunk to Stack2 as it is read.
+        $fp = fopen($backup_file, 'rb');
+        if ($fp === false) {
+            @unlink($backup_file);
+            return array('success' => false, 'error' => 'Failed to open backup file for reading. Check file permissions.');
+        }
 
-        update_option('stack2_last_backup_at', $meta['created_at']);
-        update_option('stack2_last_backup_status', 'ready');
+        $push_error = null;
+        for ($i = 0; $i < $total_chunks; $i++) {
+            $chunk_bytes = fread($fp, self::CHUNK_SIZE);
+            if ($chunk_bytes === false) {
+                $push_error = sprintf('Failed to read chunk %d from backup file.', $i);
+                break;
+            }
+
+            $is_last = ($i === $total_chunks - 1);
+            $payload = array(
+                'backup_id' => $backup_id,
+                'chunk_index' => $i,
+                'data' => base64_encode($chunk_bytes),
+                'checksum' => hash('sha256', $chunk_bytes),
+                'is_last' => $is_last,
+            );
+
+            // Include summary metadata on the final chunk so Stack2 can verify
+            // the fully reassembled file and close the upload.
+            if ($is_last) {
+                $payload['total_chunks'] = $total_chunks;
+                $payload['file_size'] = $file_size;
+                $payload['file_checksum'] = $file_checksum;
+                $payload['backup_type'] = $backup_type;
+            }
+
+            $result = $http_client->push_backup_chunk($base_url, $site_id, $api_key, $payload);
+            if (!$result['success']) {
+                $push_error = $result['error'] ?? sprintf('Failed to push chunk %d.', $i);
+                break;
+            }
+        }
+
+        fclose($fp);
+        @unlink($backup_file); // Always remove the temp file from this server.
+
+        if ($push_error !== null) {
+            $this->logger->error('Backup push failed.', array('backup_id' => $backup_id, 'error' => $push_error));
+            update_option('stack2_last_backup_status', 'failed');
+            update_option('stack2_last_backup_error', $push_error);
+            return array('success' => false, 'error' => $push_error);
+        }
+
+        update_option('stack2_last_backup_at', gmdate('c'));
+        update_option('stack2_last_backup_status', 'pushed');
         update_option('stack2_last_backup_id', $backup_id);
         update_option('stack2_last_backup_size', $file_size);
+        update_option('stack2_last_backup_total_chunks', $total_chunks);
+        update_option('stack2_last_backup_checksum', $file_checksum);
+        update_option('stack2_last_backup_type', $backup_type);
         update_option('stack2_last_backup_error', '');
 
-        $this->logger->info('Backup created.', array(
+        $this->logger->info('Backup pushed successfully.', array(
             'backup_id' => $backup_id,
             'type' => $backup_type,
             'size' => $file_size,
-            'total_chunks' => $meta['total_chunks'],
+            'total_chunks' => $total_chunks,
         ));
 
         return array(
             'success' => true,
             'backup_id' => $backup_id,
-            'total_chunks' => $meta['total_chunks'],
-            'chunk_size' => self::CHUNK_SIZE,
+            'total_chunks' => $total_chunks,
             'file_size' => $file_size,
-            'checksum' => $meta['checksum'],
-            'expires_at' => $meta['expires_at'],
+            'checksum' => $file_checksum,
+            'backup_type' => $backup_type,
         );
     }
 
     /**
-     * Return status metadata for an existing backup.
+     * Return status for the given backup_id by reading from wp_options.
+     * Returns null if the backup_id does not match the most recent backup.
      */
     public function get_status(string $backup_id): ?array
     {
-        $meta = $this->load_meta($backup_id);
-        if ($meta === null) {
+        if (!preg_match(self::BACKUP_ID_PATTERN, $backup_id)) {
+            return null;
+        }
+
+        $last_id = (string) get_option('stack2_last_backup_id', '');
+        if ($last_id !== $backup_id) {
             return null;
         }
 
         return array(
-            'backup_id' => $meta['backup_id'],
-            'backup_type' => $meta['backup_type'],
-            'status' => $meta['status'],
-            'file_size' => $meta['file_size'],
-            'chunk_size' => $meta['chunk_size'],
-            'total_chunks' => $meta['total_chunks'],
-            'checksum' => $meta['checksum'],
-            'created_at' => $meta['created_at'],
-            'expires_at' => $meta['expires_at'],
+            'backup_id' => $last_id,
+            'backup_type' => (string) get_option('stack2_last_backup_type', ''),
+            'status' => (string) get_option('stack2_last_backup_status', 'unknown'),
+            'file_size' => (int) get_option('stack2_last_backup_size', 0),
+            'chunk_size' => self::CHUNK_SIZE,
+            'total_chunks' => (int) get_option('stack2_last_backup_total_chunks', 0),
+            'checksum' => (string) get_option('stack2_last_backup_checksum', ''),
+            'created_at' => (string) get_option('stack2_last_backup_at', ''),
         );
     }
 
     /**
-     * Read a specific chunk from the backup file and return it as base64.
-     * Returns null if the backup_id or chunk_index is invalid.
-     */
-    public function get_chunk(string $backup_id, int $chunk_index): ?array
-    {
-        $meta = $this->load_meta($backup_id);
-        if ($meta === null) {
-            return null;
-        }
-
-        if ($chunk_index < 0 || $chunk_index >= $meta['total_chunks']) {
-            return null;
-        }
-
-        $backup_file = $meta['file'];
-        if (!file_exists($backup_file)) {
-            return null;
-        }
-
-        $offset = $chunk_index * $meta['chunk_size'];
-        $fp = fopen($backup_file, 'rb');
-        if ($fp === false) {
-            return null;
-        }
-
-        fseek($fp, $offset);
-        $data = fread($fp, $meta['chunk_size']);
-        fclose($fp);
-
-        if ($data === false) {
-            return null;
-        }
-
-        return array(
-            'backup_id' => $backup_id,
-            'chunk_index' => $chunk_index,
-            'total_chunks' => $meta['total_chunks'],
-            'data' => base64_encode($data),
-            'checksum' => hash('sha256', $data),
-            'is_last' => ($chunk_index === $meta['total_chunks'] - 1),
-        );
-    }
-
-    /**
-     * Delete backup files for the given backup_id.
+     * Delete any orphaned backup file for the given backup_id.
+     * In push mode the file is deleted automatically after push, so this
+     * is a safety net for failed pushes.
      */
     public function cleanup(string $backup_id): bool
     {
+        if (!preg_match(self::BACKUP_ID_PATTERN, $backup_id)) {
+            return false;
+        }
+
         $backup_dir = $this->get_backup_dir();
         if ($backup_dir === null) {
             return false;
         }
 
-        if (!preg_match(self::BACKUP_ID_PATTERN, $backup_id)) {
-            return false;
-        }
-
         $backup_file = $backup_dir . '/' . $backup_id . '.gz';
-        $meta_file = $backup_dir . '/' . $backup_id . '.json';
-
-        $cleaned = true;
         if (file_exists($backup_file)) {
-            if (!unlink($backup_file)) {
-                $cleaned = false;
-            }
-        }
-        if (file_exists($meta_file)) {
-            if (!unlink($meta_file)) {
-                $cleaned = false;
-            }
+            $result = unlink($backup_file);
+            $this->logger->info('Backup file cleaned up.', array('backup_id' => $backup_id));
+            return $result;
         }
 
-        $this->logger->info('Backup cleaned up.', array('backup_id' => $backup_id));
-
-        return $cleaned;
+        // File does not exist – already cleaned up, treat as success.
+        return true;
     }
 
     /**
-     * Remove all backup files whose expiry timestamp has passed.
+     * Delete any orphaned .gz files that are older than EXPIRY_SECONDS.
+     * These can accumulate if a push fails before the temp file is removed.
      */
     public function cleanup_expired(): void
     {
@@ -213,27 +216,16 @@ class Stack2_Backup_Service
             return;
         }
 
-        $meta_files = glob($backup_dir . '/bkp_*.json');
-        if (!is_array($meta_files)) {
+        $gz_files = glob($backup_dir . '/bkp_*.gz');
+        if (!is_array($gz_files)) {
             return;
         }
 
-        foreach ($meta_files as $meta_file) {
-            $raw = file_get_contents($meta_file);
-            if ($raw === false) {
-                continue;
-            }
-            $meta = json_decode($raw, true);
-            if (!is_array($meta)) {
-                continue;
-            }
-
-            $expires_at = isset($meta['expires_at']) ? strtotime((string) $meta['expires_at']) : false;
-            if ($expires_at !== false && time() > $expires_at) {
-                $backup_id = $meta['backup_id'] ?? '';
-                if ($backup_id !== '') {
-                    $this->cleanup($backup_id);
-                }
+        foreach ($gz_files as $gz_file) {
+            $mtime = filemtime($gz_file);
+            if ($mtime !== false && (time() - $mtime) > self::EXPIRY_SECONDS) {
+                @unlink($gz_file);
+                $this->logger->info('Expired orphan backup file cleaned up.', array('file' => basename($gz_file)));
             }
         }
     }
@@ -325,7 +317,7 @@ class Stack2_Backup_Service
 
             // Row data in batches to keep memory usage low.
             $offset = 0;
-            $batch = 200;
+            $batch = self::SQL_BATCH_SIZE;
 
             do {
                 // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
@@ -438,33 +430,5 @@ class Stack2_Backup_Service
         }
 
         return $dir;
-    }
-
-    /**
-     * Load and return a backup's metadata, or null if not found / invalid.
-     */
-    private function load_meta(string $backup_id): ?array
-    {
-        if (!preg_match(self::BACKUP_ID_PATTERN, $backup_id)) {
-            return null;
-        }
-
-        $backup_dir = $this->get_backup_dir();
-        if ($backup_dir === null) {
-            return null;
-        }
-
-        $meta_file = $backup_dir . '/' . $backup_id . '.json';
-        if (!file_exists($meta_file)) {
-            return null;
-        }
-
-        $raw = file_get_contents($meta_file);
-        if ($raw === false) {
-            return null;
-        }
-
-        $meta = json_decode($raw, true);
-        return is_array($meta) ? $meta : null;
     }
 }

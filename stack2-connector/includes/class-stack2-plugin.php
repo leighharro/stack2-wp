@@ -19,6 +19,9 @@ class Stack2_Plugin
     public const OPTION_LAST_BACKUP_ID = 'stack2_last_backup_id';
     public const OPTION_LAST_BACKUP_SIZE = 'stack2_last_backup_size';
     public const OPTION_LAST_BACKUP_ERROR = 'stack2_last_backup_error';
+    public const OPTION_LAST_BACKUP_TYPE = 'stack2_last_backup_type';
+    public const OPTION_LAST_BACKUP_TOTAL_CHUNKS = 'stack2_last_backup_total_chunks';
+    public const OPTION_LAST_BACKUP_CHECKSUM = 'stack2_last_backup_checksum';
 
     public const CRON_HOOK_SYNC = 'stack2_sync_inventory_event';
     public const CRON_HOOK_BACKUP_CLEANUP = 'stack2_backup_cleanup_event';
@@ -80,7 +83,10 @@ class Stack2_Plugin
             $this->inventory_collector,
             $this->logger,
             $this->get_site_id(),
-            $this->backup_service
+            $this->backup_service,
+            $this->http_client,
+            $this->get_base_url(),
+            $this->get_api_key()
         );
 
         $controller = new Stack2_REST_Controller(
