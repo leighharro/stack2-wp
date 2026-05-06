@@ -44,6 +44,12 @@ class Stack2_Settings_Page
         $last_error = (string) get_option(Stack2_Plugin::OPTION_LAST_SYNC_ERROR, '');
         $debug = (bool) get_option(Stack2_Logger::OPTION_DEBUG, false);
 
+        $last_backup_at = (string) get_option(Stack2_Plugin::OPTION_LAST_BACKUP_AT, '');
+        $last_backup_status = (string) get_option(Stack2_Plugin::OPTION_LAST_BACKUP_STATUS, '');
+        $last_backup_id = (string) get_option(Stack2_Plugin::OPTION_LAST_BACKUP_ID, '');
+        $last_backup_size = (int) get_option(Stack2_Plugin::OPTION_LAST_BACKUP_SIZE, 0);
+        $last_backup_error = (string) get_option(Stack2_Plugin::OPTION_LAST_BACKUP_ERROR, '');
+
         $masked_api_key = $this->mask_api_key($api_key);
         $notice = get_transient('stack2_admin_notice');
         if ($notice) {
@@ -111,6 +117,43 @@ class Stack2_Settings_Page
             <p><strong>Status:</strong> <?php echo esc_html($last_status); ?></p>
             <p><strong>At:</strong> <?php echo esc_html($last_at === '' ? 'N/A' : $last_at); ?></p>
             <p><strong>Error:</strong> <?php echo esc_html($last_error === '' ? 'None' : $last_error); ?></p>
+
+            <h2>Last Backup</h2>
+            <table class="form-table" role="presentation">
+                <tr>
+                    <th scope="row">Status</th>
+                    <td>
+                        <?php
+                        if ($last_backup_status === 'pushed') {
+                            echo '<span style="color:#2e7d32;font-weight:bold;">' . esc_html($last_backup_status) . '</span>';
+                        } elseif ($last_backup_status === 'failed') {
+                            echo '<span style="color:#c62828;font-weight:bold;">' . esc_html($last_backup_status) . '</span>';
+                        } else {
+                            echo '<span>' . esc_html($last_backup_status === '' ? 'never' : $last_backup_status) . '</span>';
+                        }
+                        ?>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">Last Run</th>
+                    <td><?php echo esc_html($last_backup_at === '' ? 'N/A' : $last_backup_at); ?></td>
+                </tr>
+                <tr>
+                    <th scope="row">Backup ID</th>
+                    <td><code><?php echo esc_html($last_backup_id === '' ? 'N/A' : $last_backup_id); ?></code></td>
+                </tr>
+                <tr>
+                    <th scope="row">File Size</th>
+                    <td><?php echo $last_backup_size > 0 ? esc_html(size_format($last_backup_size)) : 'N/A'; ?></td>
+                </tr>
+                <?php if ($last_backup_error !== '') : ?>
+                <tr>
+                    <th scope="row">Error</th>
+                    <td style="color:#c62828;"><?php echo esc_html($last_backup_error); ?></td>
+                </tr>
+                <?php endif; ?>
+            </table>
+            <p class="description">Backups are initiated remotely by the Stack2 app. See <code>BACKUP_API.md</code> for integration details.</p>
         </div>
         <?php
     }

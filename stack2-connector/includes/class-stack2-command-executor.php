@@ -9,15 +9,30 @@ class Stack2_Command_Executor
     private Stack2_Inventory_Collector $inventory_collector;
     private Stack2_Logger $logger;
     private string $site_id;
+    private ?Stack2_Backup_Service $backup_service;
+    private ?Stack2_Http_Client $http_client;
+    private string $base_url;
+    private string $api_key;
 
-    public function __construct(Stack2_Inventory_Collector $inventory_collector, Stack2_Logger $logger, string $site_id)
-    {
+    public function __construct(
+        Stack2_Inventory_Collector $inventory_collector,
+        Stack2_Logger $logger,
+        string $site_id,
+        ?Stack2_Backup_Service $backup_service = null,
+        ?Stack2_Http_Client $http_client = null,
+        string $base_url = '',
+        string $api_key = ''
+    ) {
         $this->inventory_collector = $inventory_collector;
         $this->logger = $logger;
         $this->site_id = $site_id;
+        $this->backup_service = $backup_service;
+        $this->http_client = $http_client;
+        $this->base_url = $base_url;
+        $this->api_key = $api_key;
     }
 
-    public function execute(string $action, ?string $plugin_file, ?string $slug): array
+    public function execute(string $action, ?string $plugin_file, ?string $slug, array $payload = array()): array
     {
         try {
             switch ($action) {
@@ -38,6 +53,12 @@ class Stack2_Command_Executor
 
                 case 'delete':
                     return $this->delete_plugin($plugin_file, $slug);
+
+                case 'backup':
+                    return $this->initiate_backup($payload);
+
+                case 'backup_cleanup':
+                    return $this->cleanup_backup($payload);
             }
 
             return array('success' => false, 'error' => 'Unsupported action.', 'inventory' => null);
@@ -150,6 +171,58 @@ class Stack2_Command_Executor
         }
 
         return array('success' => true, 'error' => null, 'inventory' => $this->inventory_collector->collect($this->site_id));
+    }
+
+    private function initiate_backup(array $payload): array
+    {
+        if ($this->backup_service === null || $this->http_client === null) {
+            return array('success' => false, 'error' => 'Backup service is not available.', 'inventory' => null);
+        }
+
+        $backup_type = isset($payload['backup_type']) ? sanitize_text_field((string) $payload['backup_type']) : 'full';
+
+        $result = $this->backup_service->generate_and_push(
+            $backup_type,
+            $this->base_url,
+            $this->site_id,
+            $this->api_key,
+            $this->http_client
+        );
+
+        if (!$result['success']) {
+            return array('success' => false, 'error' => $result['error'] ?? 'Backup failed.', 'inventory' => null);
+        }
+
+        return array(
+            'success' => true,
+            'error' => null,
+            'inventory' => null,
+            'backup_id' => $result['backup_id'],
+            'total_chunks' => $result['total_chunks'],
+            'total_bytes' => $result['total_bytes'],
+            'backup_type' => $result['backup_type'],
+        );
+    }
+
+    private function cleanup_backup(array $payload): array
+    {
+        if ($this->backup_service === null) {
+            return array('success' => false, 'error' => 'Backup service is not available.', 'inventory' => null);
+        }
+
+        $backup_id = isset($payload['backup_id']) ? sanitize_text_field((string) $payload['backup_id']) : '';
+        if ($backup_id === '') {
+            return array('success' => false, 'error' => 'backup_cleanup action requires backup_id.', 'inventory' => null);
+        }
+
+        // In push mode the temp file is removed automatically. This is a safety net.
+        $this->backup_service->cleanup($backup_id);
+
+        return array(
+            'success' => true,
+            'error' => null,
+            'inventory' => null,
+        );
     }
 
     private function resolve_plugin_file(?string $plugin_file, ?string $slug): ?string

@@ -76,7 +76,7 @@ class Stack2_REST_Controller
         $plugin_file = isset($payload['plugin']) ? sanitize_text_field((string) $payload['plugin']) : null;
         $slug = isset($payload['slug']) ? sanitize_title((string) $payload['slug']) : null;
 
-        $allowed = array('install', 'update', 'activate', 'deactivate', 'delete', 'inventory');
+        $allowed = array('install', 'update', 'activate', 'deactivate', 'delete', 'inventory', 'backup', 'backup_cleanup');
         if (!in_array($action, $allowed, true)) {
             return new WP_REST_Response(array(
                 'success' => false,
@@ -85,7 +85,7 @@ class Stack2_REST_Controller
             ), 400);
         }
 
-        $result = $this->command_executor->execute($action, $plugin_file, $slug);
+        $result = $this->command_executor->execute($action, $plugin_file, $slug, $payload);
         $status = $result['success'] ? 200 : 400;
 
         if (!$result['success']) {

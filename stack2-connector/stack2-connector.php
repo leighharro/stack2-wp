@@ -21,8 +21,10 @@ require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-logger.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-signature-service.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-inventory-collector.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-http-client.php';
+require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-service.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-command-executor.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-rest-controller.php';
+require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-rest-controller.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-settings-page.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-plugin.php';
 
