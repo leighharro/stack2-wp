@@ -25,7 +25,7 @@ class Stack2_Backup_Service
      * Generate a compressed backup and push each chunk to the Stack2 API.
      * The temp file is deleted from the server as soon as all chunks are pushed.
      *
-     * @param string             $backup_type  "full" | "database" | "files_manifest"
+     * @param string             $backup_type  "full" | "database" | "files"
      * @param string             $base_url     Stack2 base URL (e.g. https://app.stack2.au)
      * @param string             $site_id      Stack2 Site ID
      * @param string             $api_key      Stack2 API key
@@ -39,7 +39,11 @@ class Stack2_Backup_Service
         string $api_key,
         Stack2_Http_Client $http_client
     ): array {
-        $allowed_types = array('full', 'database', 'files_manifest');
+        $allowed_types = array('full', 'database', 'files');
+        // Treat legacy 'files_manifest' as 'files'.
+        if ($backup_type === 'files_manifest') {
+            $backup_type = 'files';
+        }
         if (!in_array($backup_type, $allowed_types, true)) {
             $backup_type = 'full';
         }
@@ -55,11 +59,11 @@ class Stack2_Backup_Service
             return array('success' => false, 'error' => 'Cannot generate a secure backup ID.');
         }
 
-        $backup_file = $backup_dir . '/' . $backup_id . '.gz';
+        $backup_file = $backup_dir . '/' . $backup_id . '.zip';
 
-        // Allow longer execution for backup generation.
+        // Allow longer execution for large-site backup generation.
         // phpcs:ignore WordPress.PHP.IniSet.Risky
-        @set_time_limit(300);
+        @set_time_limit(600);
 
         $generate_result = $this->generate_backup($backup_file, $backup_type);
         if (!$generate_result['success']) {
@@ -194,7 +198,7 @@ class Stack2_Backup_Service
             return false;
         }
 
-        $backup_file = $backup_dir . '/' . $backup_id . '.gz';
+        $backup_file = $backup_dir . '/' . $backup_id . '.zip';
         if (file_exists($backup_file)) {
             $result = unlink($backup_file);
             $this->logger->info('Backup file cleaned up.', array('backup_id' => $backup_id));
@@ -206,7 +210,7 @@ class Stack2_Backup_Service
     }
 
     /**
-     * Delete any orphaned .gz files that are older than EXPIRY_SECONDS.
+     * Delete any orphaned .zip files that are older than EXPIRY_SECONDS.
      * These can accumulate if a push fails before the temp file is removed.
      */
     public function cleanup_expired(): void
@@ -216,7 +220,7 @@ class Stack2_Backup_Service
             return;
         }
 
-        $gz_files = glob($backup_dir . '/bkp_*.gz');
+        $gz_files = glob($backup_dir . '/bkp_*.zip');
         if (!is_array($gz_files)) {
             return;
         }
@@ -234,88 +238,119 @@ class Stack2_Backup_Service
     // Private helpers
     // -------------------------------------------------------------------------
 
+    /**
+     * Build a ZIP archive containing the requested backup content.
+     *
+     * Archive layout:
+     *   database/database.sql   – full SQL dump  (types: database, full)
+     *   wp-content/             – all wp-content files recursively  (types: files, full)
+     *   wp-config.php           – WordPress configuration  (types: files, full)
+     *
+     * @param string $backup_file  Absolute path to write the zip archive to.
+     * @param string $backup_type  "full" | "database" | "files"
+     */
     private function generate_backup(string $backup_file, string $backup_type): array
     {
-        $gz = gzopen($backup_file, 'wb9');
-        if ($gz === false) {
-            return array('success' => false, 'error' => 'Cannot create backup file.');
+        if (!class_exists('ZipArchive')) {
+            return array('success' => false, 'error' => 'PHP ZipArchive extension is not available on this server.');
         }
+
+        $zip = new ZipArchive();
+        if ($zip->open($backup_file, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+            return array('success' => false, 'error' => 'Cannot create backup archive.');
+        }
+
+        // ZipArchive::addFile() only registers paths; actual file reading happens
+        // at close().  Any temp files must therefore exist until after close().
+        $temp_files = array();
 
         try {
             if ($backup_type === 'database' || $backup_type === 'full') {
-                $db_result = $this->write_database_backup($gz);
+                $db_result = $this->write_database_to_temp($backup_file . '.sql.tmp');
                 if (!$db_result['success']) {
-                    gzclose($gz);
+                    $zip->close();
                     @unlink($backup_file);
-
                     update_option('stack2_last_backup_status', 'failed');
                     update_option('stack2_last_backup_error', $db_result['error'] ?? 'Database backup failed.');
-
                     return $db_result;
                 }
+                $temp_files[] = $db_result['temp_file'];
+                $zip->addFile($db_result['temp_file'], 'database/database.sql');
             }
 
-            if ($backup_type === 'files_manifest' || $backup_type === 'full') {
-                $this->write_files_manifest($gz);
+            if ($backup_type === 'files' || $backup_type === 'full') {
+                $this->add_wp_content_to_zip($zip);
+                $this->add_wp_config_to_zip($zip);
             }
         } catch (Throwable $e) {
-            gzclose($gz);
+            $zip->close();
             @unlink($backup_file);
+            foreach ($temp_files as $tf) {
+                @unlink($tf);
+            }
 
             $message = 'Backup generation failed: ' . $e->getMessage();
             $this->logger->error($message, array('backup_file' => $backup_file));
-
             update_option('stack2_last_backup_status', 'failed');
             update_option('stack2_last_backup_error', $message);
-
             return array('success' => false, 'error' => $message);
         }
 
-        gzclose($gz);
+        // close() is when ZipArchive reads all registered files and writes the archive.
+        $zip->close();
+
+        foreach ($temp_files as $tf) {
+            @unlink($tf);
+        }
 
         return array('success' => true);
     }
 
     /**
-     * Write a full SQL dump of all WordPress database tables to the gz handle.
+     * Dump all WordPress database tables to a temporary SQL file.
      *
-     * @param resource $gz
+     * @param string $temp_path  Desired path for the temp file.
+     * @return array{success:bool,temp_file?:string,error?:string}
      */
-    private function write_database_backup($gz): array
+    private function write_database_to_temp(string $temp_path): array
     {
         global $wpdb;
 
-        gzwrite($gz, "-- Stack2 WordPress Database Backup\n");
-        gzwrite($gz, "-- Generated: " . gmdate('c') . "\n");
-        gzwrite($gz, "-- WordPress Version: " . get_bloginfo('version') . "\n");
-        gzwrite($gz, "-- PHP Version: " . PHP_VERSION . "\n");
-        gzwrite($gz, "-- Site URL: " . home_url('/') . "\n\n");
-        gzwrite($gz, "SET FOREIGN_KEY_CHECKS=0;\n\n");
+        $fh = fopen($temp_path, 'wb');
+        if ($fh === false) {
+            return array('success' => false, 'error' => 'Cannot create temporary database dump file.');
+        }
+
+        fwrite($fh, "-- Stack2 WordPress Database Backup\n");
+        fwrite($fh, "-- Generated: " . gmdate('c') . "\n");
+        fwrite($fh, "-- WordPress Version: " . get_bloginfo('version') . "\n");
+        fwrite($fh, "-- PHP Version: " . PHP_VERSION . "\n");
+        fwrite($fh, "-- Site URL: " . home_url('/') . "\n\n");
+        fwrite($fh, "SET FOREIGN_KEY_CHECKS=0;\n\n");
 
         $tables = $wpdb->get_col('SHOW TABLES');
         if (!is_array($tables)) {
+            fclose($fh);
+            @unlink($temp_path);
             return array('success' => false, 'error' => 'Failed to retrieve database tables.');
         }
 
         foreach ($tables as $table) {
-            // Sanitise table name – comes from SHOW TABLES, but we validate anyway.
             $safe_table = preg_replace('/[^a-zA-Z0-9_]/', '', (string) $table);
             if ($safe_table === '') {
                 continue;
             }
 
-            // CREATE TABLE statement.
             // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
             $create = $wpdb->get_row("SHOW CREATE TABLE `{$safe_table}`", ARRAY_N);
             if (!is_array($create) || empty($create[1])) {
                 continue;
             }
 
-            gzwrite($gz, "\n-- Table: {$safe_table}\n");
-            gzwrite($gz, "DROP TABLE IF EXISTS `{$safe_table}`;\n");
-            gzwrite($gz, $create[1] . ";\n\n");
+            fwrite($fh, "\n-- Table: {$safe_table}\n");
+            fwrite($fh, "DROP TABLE IF EXISTS `{$safe_table}`;\n");
+            fwrite($fh, $create[1] . ";\n\n");
 
-            // Row data in batches to keep memory usage low.
             $offset = 0;
             $batch = self::SQL_BATCH_SIZE;
 
@@ -337,63 +372,74 @@ class Stack2_Backup_Service
 
                     $values = implode(', ', array_map(array($this, 'escape_sql_value'), $row));
 
-                    gzwrite($gz, "INSERT INTO `{$safe_table}` ({$columns}) VALUES ({$values});\n");
+                    fwrite($fh, "INSERT INTO `{$safe_table}` ({$columns}) VALUES ({$values});\n");
                 }
 
                 $offset += $batch;
             } while (count($rows) === $batch);
         }
 
-        gzwrite($gz, "\nSET FOREIGN_KEY_CHECKS=1;\n");
+        fwrite($fh, "\nSET FOREIGN_KEY_CHECKS=1;\n");
+        fclose($fh);
 
-        return array('success' => true);
+        return array('success' => true, 'temp_file' => $temp_path);
     }
 
     /**
-     * Write a plain-text manifest of all files inside wp-content/uploads.
-     *
-     * @param resource $gz
+     * Add all files from wp-content/ to the ZIP archive.
+     * Skips our own backup directory and any non-readable files.
      */
-    private function write_files_manifest($gz): void
+    private function add_wp_content_to_zip(ZipArchive $zip): void
     {
-        $upload_dir = wp_upload_dir();
-        $base_dir = trailingslashit((string) $upload_dir['basedir']);
+        $wp_content_dir = WP_CONTENT_DIR;
 
-        if (!is_dir($base_dir)) {
+        if (!is_dir($wp_content_dir)) {
             return;
         }
 
-        gzwrite($gz, "\n-- Files Manifest (wp-content/uploads)\n");
-        gzwrite($gz, "-- Base Directory: {$base_dir}\n");
-        gzwrite($gz, "-- Generated: " . gmdate('c') . "\n\n");
-
         try {
             $iterator = new RecursiveIteratorIterator(
-                new RecursiveDirectoryIterator($base_dir, RecursiveDirectoryIterator::SKIP_DOTS),
+                new RecursiveDirectoryIterator($wp_content_dir, RecursiveDirectoryIterator::SKIP_DOTS),
                 RecursiveIteratorIterator::SELF_FIRST
             );
 
-            foreach ($iterator as $file) {
-                if (!($file instanceof SplFileInfo) || !$file->isFile()) {
+            foreach ($iterator as $item) {
+                if (!($item instanceof SplFileInfo)) {
                     continue;
                 }
 
-                $path = $file->getPathname();
+                $real_path = $item->getPathname();
 
-                // Skip files inside our own backup directory.
-                if (strpos($path, DIRECTORY_SEPARATOR . self::BACKUP_DIR_NAME . DIRECTORY_SEPARATOR) !== false) {
+                // Skip backup directory to avoid archiving backups inside backups.
+                if (strpos($real_path, DIRECTORY_SEPARATOR . self::BACKUP_DIR_NAME . DIRECTORY_SEPARATOR) !== false) {
                     continue;
                 }
 
-                $relative = ltrim(str_replace($base_dir, '', $path), '/\\');
-                $size = $file->getSize();
-                $mtime = $file->getMTime();
+                // Build a portable relative path for the zip entry.
+                $relative = 'wp-content' . str_replace($wp_content_dir, '', $real_path);
+                // Normalise to forward slashes so the zip is cross-platform.
+                $relative = str_replace(DIRECTORY_SEPARATOR, '/', $relative);
+                $relative = ltrim($relative, '/');
 
-                gzwrite($gz, "FILE: {$relative} | SIZE: {$size} | MTIME: {$mtime}\n");
+                if ($item->isDir()) {
+                    $zip->addEmptyDir($relative);
+                } elseif ($item->isFile() && $item->isReadable()) {
+                    $zip->addFile($real_path, $relative);
+                }
             }
         } catch (Throwable $e) {
-            $this->logger->error('Files manifest generation error.', array('error' => $e->getMessage()));
-            gzwrite($gz, "-- WARNING: Manifest incomplete due to error: " . $e->getMessage() . "\n");
+            $this->logger->error('wp-content backup error.', array('error' => $e->getMessage()));
+        }
+    }
+
+    /**
+     * Add wp-config.php to the ZIP archive if it exists and is readable.
+     */
+    private function add_wp_config_to_zip(ZipArchive $zip): void
+    {
+        $config_file = ABSPATH . 'wp-config.php';
+        if (file_exists($config_file) && is_readable($config_file)) {
+            $zip->addFile($config_file, 'wp-config.php');
         }
     }
 

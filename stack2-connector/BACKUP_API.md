@@ -7,7 +7,7 @@ All endpoints follow the same HMAC-based request signing contract used for plugi
 
 ## Overview
 
-The backup flow is push-based: WordPress generates the backup and pushes each chunk directly to the Stack2 API as it is read.  Stack2 does not need to poll or fetch chunks.
+The backup flow is push-based: WordPress generates a ZIP backup archive of the entire site and pushes each chunk directly to the Stack2 API as it is read.  Stack2 does not need to poll or fetch chunks.
 
 ```
 Stack2                              WordPress Plugin
@@ -15,13 +15,17 @@ Stack2                              WordPress Plugin
   |  POST /wp-json/stack2/v1/command     |
   |  {"action":"backup","backup_type":"full"}
   |------------------------------------->|
-  |                                      | 1. Generate gzip backup (DB + file manifest)
-  |                                      | 2. For each 10 MB chunk:
+  |                                      | 1. Dump database to temp .sql file
+  |                                      | 2. Create ZIP archive:
+  |                                      |    database/database.sql
+  |                                      |    wp-content/ (themes, plugins, uploads…)
+  |                                      |    wp-config.php
+  |                                      | 3. For each 10 MB chunk:
   |  POST {base_url}/api/websites/backup/chunk
   |<-------------------------------------|    push base64 chunk with checksum
   |  200 OK                              |
   |------------------------------------->|    (repeat for every chunk)
-  |                                      | 3. Delete temp file from WordPress server
+  |                                      | 4. Delete temp ZIP from WordPress server
   |  200 OK {backup_id, total_chunks ...}|
   |<-------------------------------------|
   |                                      |
@@ -33,10 +37,11 @@ Stack2                              WordPress Plugin
 ```
 
 Key points:
+- The backup is a standard **ZIP archive** — easily extracted on any platform.
 - Each chunk is **10 MB** (base64-encoded in transit).
 - Chunks arrive sequentially with a `chunk_index` starting at `0`.
-- The **last chunk** carries additional summary metadata (`total_chunks`, `file_size`, `file_checksum`, `backup_type`) so Stack2 knows when to finalise the upload.
-- The temp file is **deleted from WordPress immediately** after all chunks are pushed — no disk space is held.
+- The **last chunk** carries summary metadata (`total_chunks`, `file_size`, `file_checksum`, `backup_type`) so Stack2 knows when to finalise reassembly.
+- The temp ZIP is **deleted from WordPress immediately** after all chunks are pushed — no disk space is held on the originating server.
 
 ---
 
@@ -70,9 +75,9 @@ POST:/stack2/v1/command:{timestamp}:{sha256_hex_of_raw_json_body}
 
 | Value | Description |
 |---|---|
-| `full` | Database SQL dump + uploads file manifest (default) |
+| `full` | Full site backup: database SQL dump + all wp-content files + wp-config.php (default) |
 | `database` | WordPress database SQL dump only |
-| `files_manifest` | Plain-text list of files in `wp-content/uploads` with sizes and timestamps |
+| `files` | All wp-content files + wp-config.php (no database) |
 
 **Successful response (HTTP 200):**
 ```json
@@ -92,13 +97,13 @@ POST:/stack2/v1/command:{timestamp}:{sha256_hex_of_raw_json_body}
 |---|---|---|
 | `backup_id` | string | Unique identifier for this backup (also sent with every chunk) |
 | `total_chunks` | integer | Total number of chunks that were pushed |
-| `file_size` | integer | Total compressed backup size in bytes |
-| `checksum` | string | SHA-256 hex digest of the full compressed backup file |
+| `file_size` | integer | Total ZIP archive size in bytes |
+| `checksum` | string | SHA-256 hex digest of the full ZIP archive |
 | `backup_type` | string | The type of backup that was generated |
 
-> **Note:** By the time this response is received, all chunks have already been pushed to Stack2 and the temp file has been removed from the WordPress server.
+> **Note:** By the time this response is received, all chunks have already been pushed to Stack2 and the temp ZIP has been removed from the WordPress server.
 
-**Error response example (HTTP 400):**
+**Error response example (HTTP 200):**
 ```json
 {
   "success": false,
@@ -106,6 +111,8 @@ POST:/stack2/v1/command:{timestamp}:{sha256_hex_of_raw_json_body}
   "inventory": null
 }
 ```
+
+> The command endpoint always returns HTTP 200. Check the `success` field to determine outcome.
 
 ---
 
@@ -152,7 +159,7 @@ POST:stack2-backup-chunk:{timestamp}:{sha256_of_raw_json_body}
   "is_last": true,
   "total_chunks": 5,
   "file_size": 52428800,
-  "file_checksum": "<sha256 of full reassembled file>",
+  "file_checksum": "<sha256 of full reassembled ZIP>",
   "backup_type": "full"
 }
 ```
@@ -165,13 +172,26 @@ If Stack2 returns a non-2xx status, the plugin logs the error and stops pushing.
 Stack2 should:
 1. On each incoming chunk, decode `data` from base64 and verify `hash('sha256', decoded_bytes) === checksum`.
 2. Write the decoded bytes to a temp file at offset `chunk_index * 10485760`.
-3. When `is_last === true`, verify the full file checksum against `file_checksum` and finalise the upload.
+3. When `is_last === true`, verify the full file SHA-256 against `file_checksum`, then save the file as a standard ZIP archive for extraction/restore.
+
+The resulting ZIP layout is:
+```
+backup.zip
+├── database/
+│   └── database.sql          # Full SQL dump (types: database, full)
+├── wp-content/
+│   ├── themes/…              # All theme files
+│   ├── plugins/…             # All plugin files
+│   ├── uploads/…             # All media files
+│   └── …                     # Any other wp-content subdirectories
+└── wp-config.php             # WordPress configuration (types: files, full)
+```
 
 ---
 
 ## 3. Check Backup Status (optional)
 
-After the backup command returns, you can also query status via:
+After the backup command returns, you can verify the outcome via:
 
 **Endpoint:** `GET /wp-json/stack2/v1/backup/{backup_id}/status`
 
@@ -216,7 +236,7 @@ The constant `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` 
 
 ## 4. Safety Cleanup (optional)
 
-If a push fails mid-way, any orphaned temp file on WordPress is automatically removed by an hourly cron task.  You may also send a cleanup command:
+If a push fails mid-way, any orphaned temp file on WordPress is automatically removed by an hourly cron task.  You may also trigger cleanup manually:
 
 **Endpoint:** `POST /wp-json/stack2/v1/command`
 
@@ -235,7 +255,7 @@ This is a no-op if the file no longer exists and always returns `success: true`.
 ## End-to-End Example (pseudo-code)
 
 ```python
-import base64, hashlib, hmac, json, time, requests
+import base64, hashlib, hmac, json, time, requests, zipfile, io
 
 SITE_URL = "https://example.com"
 SITE_ID  = "site_xxx"
@@ -248,7 +268,7 @@ def sign_post(route, body_bytes, api_key):
     sig = hmac.new(api_key.encode(), message.encode(), hashlib.sha256).hexdigest()
     return ts, sig
 
-# Step 1: Trigger backup – WordPress generates the file and pushes all chunks
+# Step 1: Trigger backup – WordPress generates the ZIP and pushes all chunks
 # to POST {SITE_URL}/api/websites/backup/chunk automatically.
 body = json.dumps({"action": "backup", "backup_type": "full"}).encode()
 ts, sig = sign_post("/stack2/v1/command", body, API_KEY)
@@ -269,8 +289,8 @@ full_checksum = info["checksum"]
 
 # Step 2: Stack2 side receives chunks at POST /api/websites/backup/chunk
 # (handled by Stack2 server code – see "Stack2 Receiving Endpoint" above)
-# Chunks arrive with chunk_index 0..N-1, decoded and appended in order.
-# The final chunk (is_last=True) triggers reassembly verification.
+# Chunks arrive with chunk_index 0..N-1, decoded and written in order.
+# The final chunk (is_last=True) triggers reassembly and verification.
 
 # Step 3: (Optional) Verify status
 EMPTY_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -287,17 +307,34 @@ status_resp = requests.get(
     },
 )
 assert status_resp.json()["status"] == "pushed"
+
+# Step 4: Extract the ZIP (standard Python zipfile, or any unzip tool)
+with zipfile.ZipFile(f"/path/to/received/{backup_id}.zip") as zf:
+    zf.extractall("/restore/path/")
 ```
 
 ---
 
-## Backup File Format
+## Backup ZIP Contents
 
-The backup file is a **gzip-compressed** text archive.
+The backup is a standard **ZIP archive** that can be extracted with any unzip tool.
 
-- **Database backup** — Standard SQL dump with `DROP TABLE IF EXISTS` / `CREATE TABLE` / `INSERT` statements, rows exported in batches of 1000 for memory efficiency.
-- **Files manifest** — Plain-text listing of every file under `wp-content/uploads/` with size and modification time.
-- **Full** — Both of the above concatenated.
+| Path in ZIP | Description | Included in |
+|---|---|---|
+| `database/database.sql` | Full SQL dump of all WordPress tables | `database`, `full` |
+| `wp-content/` | All theme, plugin, upload, and other wp-content files | `files`, `full` |
+| `wp-config.php` | WordPress configuration file | `files`, `full` |
+
+**database.sql format:**
+- Standard SQL with `SET FOREIGN_KEY_CHECKS=0/1` wrappers
+- `DROP TABLE IF EXISTS` + `CREATE TABLE` + `INSERT` for each table
+- Rows exported in batches of 1,000 for memory efficiency
+
+**Restore procedure (simplified):**
+1. Extract the ZIP on the target server.
+2. Create a new database and import `database/database.sql` via `mysql` CLI or phpMyAdmin.
+3. Copy `wp-content/` to your WordPress installation's `wp-content/` directory.
+4. Copy or adapt `wp-config.php` (update `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` as needed for the new environment).
 
 ---
 
@@ -310,7 +347,7 @@ Fields displayed:
 - **Status** – `never` / `pushed` (green) / `failed` (red)
 - **Last Run** – ISO 8601 timestamp of the most recent backup
 - **Backup ID** – Identifier for the last completed backup
-- **File Size** – Human-readable compressed file size
+- **File Size** – Human-readable ZIP archive size
 
 ---
 
@@ -321,6 +358,15 @@ Fields displayed:
 - Backup temp files are stored in `wp-content/uploads/stack2-backups/` which is protected by `.htaccess` to deny direct HTTP access.
 - Backup IDs are cryptographically random (128-bit hex).
 - Orphaned temp files are automatically deleted by an hourly cron task.
+- `wp-config.php` is included in the backup for full restorability. Stack2 stores and transmits it over the same HMAC-signed channel used for all other backup data.
+
+---
+
+## Requirements
+
+- PHP `zip` extension (`ZipArchive` class) must be enabled on the WordPress server. This is enabled by default on virtually all WordPress-compatible hosts.
+- `wp-content/uploads/` must be writable by the web server process.
+- Sufficient disk space for the temporary ZIP archive (deleted immediately after push).
 
 ---
 
@@ -328,8 +374,10 @@ Fields displayed:
 
 | Symptom | Resolution |
 |---|---|
+| `PHP ZipArchive extension is not available` | Enable the `php-zip` extension on your server (e.g. `apt install php-zip`). |
 | Backup command returns `success: false` with a chunk error | Check that `{stack2_base_url}/api/websites/backup/chunk` exists and returns 2xx. |
 | `503 Stack2 credentials are not configured` | Configure Stack2 Base URL, Site ID and API Key in WordPress **Settings → Stack2 Connector**. |
-| Backup generation fails on large databases | The plugin sets PHP execution time to 300 s. Contact your hosting provider if the server enforces a lower limit. |
+| Backup generation fails on large sites | The plugin sets PHP execution time to 600 s. Contact your hosting provider if the server enforces a lower limit. |
 | `Cannot create backup directory` | Ensure `wp-content/uploads/` is writable by the web server. |
 | `401 Signature verification failed` on status endpoint | Remember that GET request signing uses the SHA-256 of an empty body. |
+
