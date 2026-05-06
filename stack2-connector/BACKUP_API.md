@@ -18,8 +18,7 @@ Stack2                              WordPress Plugin
   |                                      | 1. Dump database to temp .sql file
   |                                      | 2. Create ZIP archive:
   |                                      |    database/database.sql
-  |                                      |    wp-content/ (themes, plugins, uploads…)
-  |                                      |    wp-config.php
+  |                                      |    wordpress/ (entire WP root directory)
   |                                      | 3. For each 10 MB chunk:
   |  POST {base_url}/api/websites/backup/chunk
   |<-------------------------------------|    push base64 chunk with checksum
@@ -75,9 +74,9 @@ POST:/stack2/v1/command:{timestamp}:{sha256_hex_of_raw_json_body}
 
 | Value | Description |
 |---|---|
-| `full` | Full site backup: database SQL dump + all wp-content files + wp-config.php (default) |
+| `full` | Full site backup: database SQL dump + entire WordPress root directory (default) |
 | `database` | WordPress database SQL dump only |
-| `files` | All wp-content files + wp-config.php (no database) |
+| `files` | Entire WordPress root directory (no database) |
 
 **Successful response (HTTP 200):**
 ```json
@@ -179,12 +178,18 @@ The resulting ZIP layout is:
 backup.zip
 ├── database/
 │   └── database.sql          # Full SQL dump (types: database, full)
-├── wp-content/
-│   ├── themes/…              # All theme files
-│   ├── plugins/…             # All plugin files
-│   ├── uploads/…             # All media files
-│   └── …                     # Any other wp-content subdirectories
-└── wp-config.php             # WordPress configuration (types: files, full)
+└── wordpress/
+    ├── wp-admin/…            # WordPress admin files
+    ├── wp-includes/…         # WordPress core library files
+    ├── wp-content/
+    │   ├── themes/…          # All theme files
+    │   ├── plugins/…         # All plugin files
+    │   ├── uploads/…         # All media files
+    │   └── …                 # Any other wp-content subdirectories
+    ├── wp-config.php         # WordPress configuration
+    ├── index.php             # WordPress front controller
+    ├── .htaccess             # Apache rewrite rules (if present)
+    └── …                     # Any other files in the WordPress root
 ```
 
 ---
@@ -322,8 +327,7 @@ The backup is a standard **ZIP archive** that can be extracted with any unzip to
 | Path in ZIP | Description | Included in |
 |---|---|---|
 | `database/database.sql` | Full SQL dump of all WordPress tables | `database`, `full` |
-| `wp-content/` | All theme, plugin, upload, and other wp-content files | `files`, `full` |
-| `wp-config.php` | WordPress configuration file | `files`, `full` |
+| `wordpress/` | Entire WordPress root directory (wp-admin, wp-includes, wp-content, wp-config.php, .htaccess, and all other files) | `files`, `full` |
 
 **database.sql format:**
 - Standard SQL with `SET FOREIGN_KEY_CHECKS=0/1` wrappers
@@ -332,9 +336,10 @@ The backup is a standard **ZIP archive** that can be extracted with any unzip to
 
 **Restore procedure (simplified):**
 1. Extract the ZIP on the target server.
-2. Create a new database and import `database/database.sql` via `mysql` CLI or phpMyAdmin.
-3. Copy `wp-content/` to your WordPress installation's `wp-content/` directory.
-4. Copy or adapt `wp-config.php` (update `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` as needed for the new environment).
+2. Copy the contents of `wordpress/` into your web root (or a new directory).
+3. Edit `wordpress/wp-config.php` to update `DB_HOST`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` for the new environment.
+4. Create a new database and import `database/database.sql` via `mysql` CLI or phpMyAdmin.
+5. Update the `siteurl` and `home` options in the database if the domain has changed.
 
 ---
 
@@ -358,7 +363,7 @@ Fields displayed:
 - Backup temp files are stored in `wp-content/uploads/stack2-backups/` which is protected by `.htaccess` to deny direct HTTP access.
 - Backup IDs are cryptographically random (128-bit hex).
 - Orphaned temp files are automatically deleted by an hourly cron task.
-- `wp-config.php` is included in the backup for full restorability. Stack2 stores and transmits it over the same HMAC-signed channel used for all other backup data.
+- `wp-config.php` is included in the backup for full restorability (as part of the `wordpress/` tree). Stack2 stores and transmits it over the same HMAC-signed channel used for all other backup data.
 
 ---
 

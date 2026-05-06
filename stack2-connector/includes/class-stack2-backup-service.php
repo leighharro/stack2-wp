@@ -243,8 +243,10 @@ class Stack2_Backup_Service
      *
      * Archive layout:
      *   database/database.sql   – full SQL dump  (types: database, full)
-     *   wp-content/             – all wp-content files recursively  (types: files, full)
-     *   wp-config.php           – WordPress configuration  (types: files, full)
+     *   wordpress/              – entire WordPress root recursively  (types: files, full)
+     *                             includes wp-admin/, wp-includes/, wp-content/,
+     *                             wp-config.php, .htaccess, index.php, and any
+     *                             other files placed in the WordPress root directory.
      *
      * @param string $backup_file  Absolute path to write the zip archive to.
      * @param string $backup_type  "full" | "database" | "files"
@@ -279,8 +281,7 @@ class Stack2_Backup_Service
             }
 
             if ($backup_type === 'files' || $backup_type === 'full') {
-                $this->add_wp_content_to_zip($zip);
-                $this->add_wp_config_to_zip($zip);
+                $this->add_wordpress_root_to_zip($zip, $backup_file);
             }
         } catch (Throwable $e) {
             $zip->close();
@@ -386,20 +387,37 @@ class Stack2_Backup_Service
     }
 
     /**
-     * Add all files from wp-content/ to the ZIP archive.
-     * Skips our own backup directory and any non-readable files.
+     * Add all files from the WordPress root directory (ABSPATH) to the ZIP archive.
+     *
+     * Every file found under ABSPATH is stored under wordpress/ in the archive,
+     * preserving the full directory tree so the site can be restored intact.
+     *
+     * Exclusions:
+     *  - Our own backup directory (prevents recursive self-inclusion).
+     *  - The ZIP archive file currently being written.
+     *
+     * @param ZipArchive $zip         Open archive to add files into.
+     * @param string     $backup_file Absolute path of the ZIP file being created (excluded).
      */
-    private function add_wp_content_to_zip(ZipArchive $zip): void
+    private function add_wordpress_root_to_zip(ZipArchive $zip, string $backup_file): void
     {
-        $wp_content_dir = WP_CONTENT_DIR;
+        $wp_root = rtrim((string) ABSPATH, '/\\');
 
-        if (!is_dir($wp_content_dir)) {
+        if (!is_dir($wp_root)) {
             return;
         }
 
+        // Compute the absolute backup dir path so we can reliably exclude it.
+        $upload_dir = wp_upload_dir();
+        $backup_dir_path = rtrim((string) $upload_dir['basedir'], '/\\')
+            . DIRECTORY_SEPARATOR . self::BACKUP_DIR_NAME;
+
+        // Resolve the backup ZIP path once so the comparison is symlink-safe.
+        $backup_file_real = realpath($backup_file) ?: $backup_file;
+
         try {
             $iterator = new RecursiveIteratorIterator(
-                new RecursiveDirectoryIterator($wp_content_dir, RecursiveDirectoryIterator::SKIP_DOTS),
+                new RecursiveDirectoryIterator($wp_root, RecursiveDirectoryIterator::SKIP_DOTS),
                 RecursiveIteratorIterator::SELF_FIRST
             );
 
@@ -410,14 +428,19 @@ class Stack2_Backup_Service
 
                 $real_path = $item->getPathname();
 
-                // Skip backup directory to avoid archiving backups inside backups.
-                if (strpos($real_path, DIRECTORY_SEPARATOR . self::BACKUP_DIR_NAME . DIRECTORY_SEPARATOR) !== false) {
+                // Skip the backup directory and everything inside it.
+                if (strpos($real_path, $backup_dir_path) === 0) {
                     continue;
                 }
 
-                // Build a portable relative path for the zip entry.
-                $relative = 'wp-content' . str_replace($wp_content_dir, '', $real_path);
-                // Normalise to forward slashes so the zip is cross-platform.
+                // Skip the ZIP file currently being written.
+                $real_path_resolved = realpath($real_path) ?: $real_path;
+                if ($real_path_resolved === $backup_file_real) {
+                    continue;
+                }
+
+                // Build a portable relative path under wordpress/ in the archive.
+                $relative = 'wordpress' . str_replace($wp_root, '', $real_path);
                 $relative = str_replace(DIRECTORY_SEPARATOR, '/', $relative);
                 $relative = ltrim($relative, '/');
 
@@ -428,18 +451,7 @@ class Stack2_Backup_Service
                 }
             }
         } catch (Throwable $e) {
-            $this->logger->error('wp-content backup error.', array('error' => $e->getMessage()));
-        }
-    }
-
-    /**
-     * Add wp-config.php to the ZIP archive if it exists and is readable.
-     */
-    private function add_wp_config_to_zip(ZipArchive $zip): void
-    {
-        $config_file = ABSPATH . 'wp-config.php';
-        if (file_exists($config_file) && is_readable($config_file)) {
-            $zip->addFile($config_file, 'wp-config.php');
+            $this->logger->error('WordPress root backup error.', array('error' => $e->getMessage()));
         }
     }
 
