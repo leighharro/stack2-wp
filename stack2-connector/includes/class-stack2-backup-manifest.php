@@ -1,0 +1,101 @@
+<?php
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+class Stack2_Backup_Manifest
+{
+    public function build_manifest(
+        string $backup_id,
+        string $job_id,
+        bool $include_files,
+        bool $include_database,
+        array $database_info,
+        array $file_info = array()
+    ): array {
+        $uploads = wp_upload_dir();
+        $manifest_files = $this->sanitize_manifest_files($file_info['files'] ?? array());
+        $manifest_tables = $this->sanitize_manifest_tables($database_info['tables'] ?? array());
+        $generated_at = gmdate('c');
+
+        return array(
+            'backup_id' => $backup_id,
+            'job_id' => $job_id,
+            'wordpress_version' => get_bloginfo('version'),
+            'php_version' => PHP_VERSION,
+            'site_url' => get_site_url(),
+            'home_url' => home_url('/'),
+            'generated_at' => $generated_at,
+            'backup_started_at' => $generated_at,
+            'include_files' => $include_files,
+            'include_database' => $include_database,
+            'wp_content_path' => WP_CONTENT_DIR,
+            'wp_uploads_path' => (string) ($uploads['basedir'] ?? ''),
+            'database' => array(
+                'host' => (string) ($database_info['host'] ?? ''),
+                'port' => (int) ($database_info['port'] ?? 3306),
+                'name' => (string) ($database_info['name'] ?? ''),
+                'charset' => (string) ($database_info['charset'] ?? ''),
+                'collation' => (string) ($database_info['collation'] ?? ''),
+            ),
+            'estimated_files_count' => (int) ($file_info['files_count'] ?? 0),
+            'estimated_database_size_mb' => (int) ceil(((int) ($database_info['size_bytes'] ?? 0)) / 1048576),
+            'tables_count' => (int) ($database_info['tables_count'] ?? 0),
+            'files' => $include_files ? $manifest_files : array(),
+            'tables' => $include_database ? $manifest_tables : array(),
+        );
+    }
+
+    private function sanitize_manifest_files($files): array
+    {
+        if (!is_array($files)) {
+            return array();
+        }
+
+        $sanitized = array();
+        foreach ($files as $file) {
+            $value = trim((string) $file);
+            if ($value === '') {
+                continue;
+            }
+            $sanitized[] = $value;
+        }
+
+        return array_values(array_unique($sanitized));
+    }
+
+    private function sanitize_manifest_tables($tables): array
+    {
+        if (!is_array($tables)) {
+            return array();
+        }
+
+        $sanitized = array();
+        foreach ($tables as $table) {
+            $value = trim((string) $table);
+            if ($value === '') {
+                continue;
+            }
+            $sanitized[] = $value;
+        }
+
+        return array_values(array_unique($sanitized));
+    }
+
+    public function save_manifest(array $manifest, string $temp_dir): string
+    {
+        $path = trailingslashit($temp_dir) . 'manifest.json';
+
+        $json = wp_json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        if ($json === false) {
+            throw new RuntimeException('Failed to encode backup manifest.');
+        }
+
+        if (file_put_contents($path, $json) === false) {
+            throw new RuntimeException('Failed to write backup manifest.');
+        }
+
+        return $path;
+    }
+}

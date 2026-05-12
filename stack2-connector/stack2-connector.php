@@ -23,6 +23,13 @@ require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-inventory-collector.
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-http-client.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-command-executor.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-rest-controller.php';
+require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-authentication.php';
+require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-compressor.php';
+require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-database-dumper.php';
+require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-manifest.php';
+require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-cleaner.php';
+require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-manager.php';
+require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-api.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-settings-page.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-plugin.php';
 

@@ -6,6 +6,12 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
 
 - Inventory sync to Stack2 endpoint: `POST /api/websites/plugin-inventory`
 - Signed command endpoint: `POST /wp-json/stack2/v1/command`
+- Backup initiation endpoint: `POST /wp-json/stack2/v1/backups/initiate`
+- Backup status endpoint: deprecated in stateless mode
+- Backup database table download endpoint: `GET /wp-json/stack2/v1/backups/{job_id}/database/table/{base64url_table_name}`
+- Backup file download endpoint: `GET /wp-json/stack2/v1/backups/{job_id}/files/{base64url_relative_path}`
+- Backup cleanup endpoint: `DELETE /wp-json/stack2/v1/backups/{job_id}`
+- Backup list endpoint: deprecated in stateless mode
 - HMAC SHA256 request signing and timestamp replay protection
 - Allowed commands: `install`, `update`, `activate`, `deactivate`, `delete`, `inventory`
 - WP-Cron scheduled sync with retry backoff for transient failures
@@ -64,6 +70,33 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
 - Message format for verification:
   - `POST:/stack2/v1/command:{timestamp}:{sha256_hex_of_raw_json_body}`
 - Timestamp skew allowed: 300 seconds
+
+### Backup Endpoint Verification (Stack2 to WordPress)
+
+- Required headers:
+  - `X-Stack2-Site-ID`
+  - `X-Stack2-Timestamp`
+  - `X-Stack2-Signature`
+- Message format for verification:
+  - `{METHOD}:{/wp-json/stack2/v1/backups/...}:{timestamp}:{sha256_hex_of_raw_json_body}`
+  - For empty bodies (`GET`/`DELETE`), body hash is `sha256("")`.
+- Timestamp skew allowed: 300 seconds
+
+## Backup Status Values
+
+Stateful status transitions are deprecated in stateless mode.
+
+## Backup Storage Layout
+
+Artifacts are created under:
+
+- `wp-content/.stack2-backup/{job_id}/database-table-{table}.sql.gz` (on-demand per table)
+
+File downloads are streamed directly from `wp-content` using:
+
+- `GET /wp-json/stack2/v1/backups/{job_id}/files/{base64url_relative_path}`
+
+The manifest returned during initiate is used by the control server as the canonical file/table list.
 
 ## Command Payload
 

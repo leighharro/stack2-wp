@@ -23,6 +23,11 @@ class Stack2_Signature_Service
         return sprintf('POST:/stack2/v1/command:%s:%s', $timestamp, $body_hash);
     }
 
+    public function build_request_message(string $method, string $path, string $timestamp, string $body_hash): string
+    {
+        return sprintf('%s:%s:%s:%s', strtoupper($method), $path, $timestamp, $body_hash);
+    }
+
     public function sign(string $message, string $api_key): string
     {
         return hash_hmac('sha256', $message, $api_key);
@@ -35,6 +40,25 @@ class Stack2_Signature_Service
     }
 
     public function verify_command_request(array $headers, string $raw_body, string $expected_site_id, string $api_key)
+    {
+        return $this->verify_signed_request(
+            $headers,
+            $raw_body,
+            $expected_site_id,
+            $api_key,
+            'POST',
+            '/stack2/v1/command'
+        );
+    }
+
+    public function verify_signed_request(
+        array $headers,
+        string $raw_body,
+        string $expected_site_id,
+        string $api_key,
+        string $method,
+        string $path
+    )
     {
         $site_id = $headers['site_id'] ?? '';
         $timestamp = $headers['timestamp'] ?? '';
@@ -53,13 +77,13 @@ class Stack2_Signature_Service
         }
 
         if (abs(time() - (int) $timestamp) > self::ALLOWED_SKEW_SECONDS) {
-            return new WP_Error('stack2_stale_timestamp', 'Timestamp outside allowed skew window.', array('status' => 401));
+            return new WP_Error('stack2_stale_timestamp', 'Timestamp out of tolerance (> 300s)', array('status' => 401));
         }
 
         $body_hash = $this->sha256_hex($raw_body);
-        $message = $this->build_command_message((string) $timestamp, $body_hash);
+        $message = $this->build_request_message($method, $path, (string) $timestamp, $body_hash);
         if (!$this->verify($message, $signature, $api_key)) {
-            return new WP_Error('stack2_bad_signature', 'Signature verification failed.', array('status' => 401));
+            return new WP_Error('stack2_bad_signature', 'Invalid HMAC signature', array('status' => 401));
         }
 
         return true;

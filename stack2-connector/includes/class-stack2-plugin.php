@@ -22,6 +22,7 @@ class Stack2_Plugin
     private Stack2_Signature_Service $signature_service;
     private Stack2_Inventory_Collector $inventory_collector;
     private Stack2_Http_Client $http_client;
+    private Stack2_Backup_Manager $backup_manager;
 
     public function __construct()
     {
@@ -29,6 +30,14 @@ class Stack2_Plugin
         $this->signature_service = new Stack2_Signature_Service();
         $this->inventory_collector = new Stack2_Inventory_Collector();
         $this->http_client = new Stack2_Http_Client($this->signature_service);
+
+        $this->backup_manager = new Stack2_Backup_Manager(
+            $this->logger,
+            new Stack2_Backup_Compressor($this->logger),
+            new Stack2_Database_Dumper($this->logger),
+            new Stack2_Backup_Manifest(),
+            new Stack2_Backup_Cleaner()
+        );
     }
 
     public function bootstrap(): void
@@ -79,6 +88,16 @@ class Stack2_Plugin
         );
 
         $controller->register_routes();
+
+        $backup_api = new Stack2_Backup_API(
+            $this->backup_manager,
+            new Stack2_Backup_Authentication($this->signature_service),
+            $this->logger,
+            $this->get_site_id(),
+            $this->get_api_key()
+        );
+
+        $backup_api->register_routes();
     }
 
     public function register_cron_schedule(array $schedules): array
@@ -172,6 +191,11 @@ class Stack2_Plugin
         return $this->get_base_url() !== '' && $this->get_site_id() !== '' && $this->get_api_key() !== '';
     }
 
+    public function get_backup_manager(): Stack2_Backup_Manager
+    {
+        return $this->backup_manager;
+    }
+
     private function record_sync_status(bool $success, string $error): void
     {
         update_option(self::OPTION_LAST_SYNC_AT, gmdate('c'));
@@ -208,4 +232,5 @@ class Stack2_Plugin
     {
         return (string) get_option(self::OPTION_API_KEY, '');
     }
+
 }
