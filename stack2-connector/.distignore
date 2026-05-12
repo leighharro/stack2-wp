@@ -1,0 +1,15 @@
+.git
+.github
+.gitignore
+.distignore
+.DS_Store
+node_modules/
+vendor/bin/
+tests/
+phpunit.xml
+phpunit.xml.dist
+composer.json
+composer.lock
+package.json
+package-lock.json
+npm-debug.log

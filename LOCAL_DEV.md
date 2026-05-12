@@ -2,6 +2,10 @@
 
 This repository includes two minimal local setups:
 
+Release documentation:
+
+- See RELEASING.md for the end-to-end release process and tagging workflow.
+
 - wp-env (quickest path for plugin testing)
 - Docker Compose (portable and explicit services)
 
