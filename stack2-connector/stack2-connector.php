@@ -5,7 +5,7 @@
  * Version: 1.0.0
  * Author: Stack2
  * Requires at least: 6.0
- * Requires PHP: 8.1
+* Requires PHP: 7.4
  * Text Domain: stack2-connector
  */
 
