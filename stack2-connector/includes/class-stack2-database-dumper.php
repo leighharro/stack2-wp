@@ -98,39 +98,60 @@ class Stack2_Database_Dumper
             fwrite($output, 'DROP TABLE IF EXISTS `' . $table . '`;' . "\n");
             fwrite($output, $create[1] . ';' . "\n\n");
 
-            $rows = $wpdb->get_results("SELECT * FROM `{$table}`", ARRAY_A);
-            if (!is_array($rows) || empty($rows)) {
-                continue;
-            }
+            // Fetch and process rows in chunks to avoid memory exhaustion
+            $chunk_size = 1000;
+            $offset = 0;
+            $table_has_rows = false;
 
-            foreach ($rows as $row) {
-                $columns = array_map(static function ($column) {
-                    return '`' . str_replace('`', '``', (string) $column) . '`';
-                }, array_keys($row));
+            while (true) {
+                $rows = $wpdb->get_results(
+                    $wpdb->prepare(
+                        "SELECT * FROM `{$table}` LIMIT %d OFFSET %d",
+                        $chunk_size,
+                        $offset
+                    ),
+                    ARRAY_A
+                );
 
-                $values = array();
-                foreach ($row as $value) {
-                    $values[] = $this->sql_value($value);
+                if (!is_array($rows) || empty($rows)) {
+                    break;
                 }
 
-                $sql = 'INSERT INTO `' . $table . '` (' . implode(',', $columns) . ') VALUES (' . implode(',', $values) . ');' . "\n";
-                fwrite($output, $sql);
+                $table_has_rows = true;
 
-                $rows_processed++;
-                $progress_callback(array(
-                    'phase' => 'database_dump',
-                    'files_processed' => 0,
-                    'files_total' => 0,
-                    'database_rows_processed' => $rows_processed,
-                    'database_rows_total' => $rows_total,
-                    'bytes_processed' => 0,
-                    'bytes_total' => 0,
-                    'percent' => (int) min(99, floor(($rows_processed / $rows_total) * 100)),
-                    'current_file' => $table,
-                ));
+                foreach ($rows as $row) {
+                    $columns = array_map(static function ($column) {
+                        return '`' . str_replace('`', '``', (string) $column) . '`';
+                    }, array_keys($row));
+
+                    $values = array();
+                    foreach ($row as $value) {
+                        $values[] = $this->sql_value($value);
+                    }
+
+                    $sql = 'INSERT INTO `' . $table . '` (' . implode(',', $columns) . ') VALUES (' . implode(',', $values) . ');' . "\n";
+                    fwrite($output, $sql);
+
+                    $rows_processed++;
+                    $progress_callback(array(
+                        'phase' => 'database_dump',
+                        'files_processed' => 0,
+                        'files_total' => 0,
+                        'database_rows_processed' => $rows_processed,
+                        'database_rows_total' => $rows_total,
+                        'bytes_processed' => 0,
+                        'bytes_total' => 0,
+                        'percent' => (int) min(99, floor(($rows_processed / $rows_total) * 100)),
+                        'current_file' => $table,
+                    ));
+                }
+
+                $offset += $chunk_size;
             }
 
-            fwrite($output, "\n");
+            if ($table_has_rows) {
+                fwrite($output, "\n");
+            }
         }
 
         fwrite($output, 'SET FOREIGN_KEY_CHECKS=1;' . "\n");
@@ -199,9 +220,25 @@ class Stack2_Database_Dumper
         fwrite($output, 'DROP TABLE IF EXISTS `' . $escaped_table . '`;' . "\n");
         fwrite($output, $create[1] . ';' . "\n\n");
 
-        $rows = $wpdb->get_results("SELECT * FROM `{$escaped_table}`", ARRAY_A);
+        // Fetch and process rows in chunks to avoid memory exhaustion
         $rows_processed = 0;
-        if (is_array($rows) && !empty($rows)) {
+        $chunk_size = 1000;
+        $offset = 0;
+
+        while (true) {
+            $rows = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT * FROM `{$escaped_table}` LIMIT %d OFFSET %d",
+                    $chunk_size,
+                    $offset
+                ),
+                ARRAY_A
+            );
+
+            if (!is_array($rows) || empty($rows)) {
+                break;
+            }
+
             foreach ($rows as $row) {
                 $columns = array_map(static function ($column) {
                     return '`' . str_replace('`', '``', (string) $column) . '`';
@@ -216,6 +253,8 @@ class Stack2_Database_Dumper
                 fwrite($output, $sql);
                 $rows_processed++;
             }
+
+            $offset += $chunk_size;
         }
 
         fwrite($output, "\nSET FOREIGN_KEY_CHECKS=1;\n");
@@ -239,18 +278,35 @@ class Stack2_Database_Dumper
 
     private function compress_sql_dump(string $sql_file, string $gz_file): void
     {
-        $data = file_get_contents($sql_file);
-        if ($data === false) {
-            throw new RuntimeException('Unable to read SQL dump for compression.');
+        // Use streaming compression to avoid loading entire file into memory
+        $input = fopen($sql_file, 'rb');
+        if ($input === false) {
+            throw new RuntimeException('Unable to open SQL dump for compression.');
         }
 
-        $compressed = gzencode($data, 6);
-        if ($compressed === false) {
-            throw new RuntimeException('Unable to compress SQL dump.');
+        $output = gzopen($gz_file, 'wb6');
+        if ($output === false) {
+            fclose($input);
+            throw new RuntimeException('Unable to create compressed dump file.');
         }
 
-        if (file_put_contents($gz_file, $compressed) === false) {
-            throw new RuntimeException('Unable to write compressed SQL dump.');
+        try {
+            while (!feof($input)) {
+                $chunk = fread($input, 65536); // Read in 64KB chunks
+                if ($chunk === false) {
+                    throw new RuntimeException('Error reading SQL dump during compression.');
+                }
+
+                if (strlen($chunk) > 0) {
+                    $written = gzwrite($output, $chunk);
+                    if ($written === false) {
+                        throw new RuntimeException('Error writing compressed data.');
+                    }
+                }
+            }
+        } finally {
+            gzclose($output);
+            fclose($input);
         }
     }
 
@@ -260,21 +316,27 @@ class Stack2_Database_Dumper
             return false;
         }
 
-        if ((int) filesize($dump_file) <= 0) {
+        $size = filesize($dump_file);
+        if ($size === false || (int) $size <= 0) {
             return false;
         }
 
-        $compressed = file_get_contents($dump_file);
-        if ($compressed === false) {
+        // Read and verify just the first chunk to avoid decompressing entire file
+        $gz_file = gzopen($dump_file, 'rb');
+        if ($gz_file === false) {
             return false;
         }
 
-        $data = gzdecode($compressed);
-        if ($data === false) {
-            return false;
-        }
+        try {
+            $first_chunk = gzread($gz_file, 4096);
+            if ($first_chunk === false || strlen($first_chunk) === 0) {
+                return false;
+            }
 
-        return strpos($data, 'CREATE TABLE') !== false;
+            return strpos($first_chunk, 'CREATE TABLE') !== false;
+        } finally {
+            gzclose($gz_file);
+        }
     }
 
     private function sql_value($value): string

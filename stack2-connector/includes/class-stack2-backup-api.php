@@ -249,18 +249,13 @@ class Stack2_Backup_API
             return new WP_REST_Response(array('success' => false, 'error' => 'Backup file missing.'), 404);
         }
 
-        if (ob_get_level() > 0) {
-            ob_end_clean();
-        }
-
         header('Content-Type: ' . $component_file['content_type']);
         header('Content-Disposition: attachment; filename=' . basename($component_file['filename']));
         header('Content-Length: ' . (string) $component_file['size']);
         header('X-Backup-Checksum-SHA256: ' . $component_file['checksum']);
         header('X-Backup-Relative-Path: ' . rawurlencode((string) ($component_file['relative_path'] ?? '')));
 
-        readfile($file_path);
-        exit;
+        $this->stream_file_download($file_path);
     }
 
     public function download_database_table(WP_REST_Request $request)
@@ -294,18 +289,13 @@ class Stack2_Backup_API
             return new WP_REST_Response(array('success' => false, 'error' => 'Database table backup file missing.'), 404);
         }
 
-        if (ob_get_level() > 0) {
-            ob_end_clean();
-        }
-
         header('Content-Type: ' . $component_file['content_type']);
         header('Content-Disposition: attachment; filename=' . basename($component_file['filename']));
         header('Content-Length: ' . (string) $component_file['size']);
         header('X-Backup-Checksum-SHA256: ' . $component_file['checksum']);
         header('X-Backup-Database-Table: ' . rawurlencode((string) ($component_file['table'] ?? '')));
 
-        readfile($file_path);
-        exit;
+        $this->stream_file_download($file_path);
     }
 
     public function cleanup_backup(WP_REST_Request $request): WP_REST_Response
@@ -503,5 +493,48 @@ class Stack2_Backup_API
         }
 
         return (string) $decoded;
+    }
+
+    private function stream_file_download(string $file_path): void
+    {
+        if (function_exists('apache_setenv')) {
+            @apache_setenv('no-gzip', '1');
+        }
+
+        @ini_set('zlib.output_compression', '0');
+        @ini_set('output_buffering', '0');
+
+        while (ob_get_level() > 0) {
+            @ob_end_clean();
+        }
+
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(0);
+        }
+
+        $handle = fopen($file_path, 'rb');
+        if ($handle === false) {
+            exit;
+        }
+
+        // Stream in fixed-size chunks to keep process memory usage stable.
+        $chunk_size = 1048576;
+
+        while (!feof($handle)) {
+            $chunk = fread($handle, $chunk_size);
+            if ($chunk === false) {
+                break;
+            }
+
+            echo $chunk;
+            flush();
+
+            if (connection_aborted()) {
+                break;
+            }
+        }
+
+        fclose($handle);
+        exit;
     }
 }
