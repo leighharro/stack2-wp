@@ -82,6 +82,18 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
   - For empty bodies (`GET`/`DELETE`), body hash is `sha256("")`.
 - Timestamp skew allowed: 300 seconds
 
+### Backup Initiate Request Body
+
+`POST /wp-json/stack2/v1/backups/initiate` accepts:
+
+- `backup_id` (string, optional)
+- `job_id` (string, optional)
+- `include_files` (bool, required as part of include selection)
+- `include_database` (bool, required as part of include selection)
+- `timestamp` (string, optional)
+
+If `job_id` is provided and matches `[A-Za-z0-9_-]` (max 128 chars), the plugin reuses it. Otherwise it generates a new value like `backup_<id>_<unix>`.
+
 ## Backup Status Values
 
 Stateful status transitions are deprecated in stateless mode.

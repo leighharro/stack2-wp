@@ -65,6 +65,7 @@ Empty body hash constant:
 ```json
 {
   "backup_id": "<uuid-or-external-id>",
+  "job_id": "backup_xxxxxxxx_1715425800",
   "include_files": true,
   "include_database": true,
   "timestamp": "2026-05-11T14:30:00Z"
@@ -97,6 +98,7 @@ Notes:
 - `manifest.files` is the canonical list for file downloads.
 - `manifest.tables` is the canonical list for DB table downloads.
 - `job_id` is used for subsequent download and cleanup endpoints.
+- `job_id` in request body is optional. If provided and valid (`[A-Za-z0-9_-]`, max 128 chars), the plugin reuses it instead of generating a new one.
 
 ### 2) Download one file from manifest
 

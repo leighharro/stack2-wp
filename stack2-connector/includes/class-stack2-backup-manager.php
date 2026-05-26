@@ -26,14 +26,14 @@ class Stack2_Backup_Manager
         $this->cleaner = $cleaner;
     }
 
-    public function initiate_backup(string $backup_id, bool $include_files, bool $include_database, string $requested_at): array
+    public function initiate_backup(string $backup_id, bool $include_files, bool $include_database, string $requested_at, string $requested_job_id = ''): array
     {
         if (!$include_files && !$include_database) {
             throw new InvalidArgumentException('Missing include_files and include_database both false');
         }
 
         $backup_id = $this->normalize_backup_id($backup_id);
-        $job_id = 'backup_' . substr(str_replace('-', '', $backup_id), 0, 8) . '_' . time();
+        $job_id = $this->normalize_job_id($requested_job_id, $backup_id);
 
         $temp_dir = trailingslashit($this->get_base_backup_dir()) . $job_id;
         wp_mkdir_p($temp_dir);
@@ -213,6 +213,20 @@ class Stack2_Backup_Manager
             . substr($hex, 16, 4)
             . '-'
             . substr($hex, 20, 12);
+    }
+
+    private function normalize_job_id(string $requested_job_id, string $backup_id): string
+    {
+        $job_id = trim($requested_job_id);
+        if ($job_id === '') {
+            return 'backup_' . substr(str_replace('-', '', $backup_id), 0, 8) . '_' . time();
+        }
+
+        if (!preg_match('/^[A-Za-z0-9_-]{1,128}$/', $job_id)) {
+            throw new InvalidArgumentException('Invalid job_id format. Use only letters, numbers, underscores, and hyphens.');
+        }
+
+        return $job_id;
     }
 
     private function get_base_backup_dir(): string

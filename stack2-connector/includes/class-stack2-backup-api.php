@@ -147,12 +147,13 @@ class Stack2_Backup_API
         }
 
         $backup_id = isset($payload['backup_id']) ? sanitize_text_field((string) $payload['backup_id']) : '';
+        $job_id = isset($payload['job_id']) ? sanitize_text_field((string) $payload['job_id']) : '';
         $include_files = isset($payload['include_files']) ? (bool) $payload['include_files'] : false;
         $include_database = isset($payload['include_database']) ? (bool) $payload['include_database'] : false;
         $requested_at = isset($payload['timestamp']) ? sanitize_text_field((string) $payload['timestamp']) : gmdate('c');
 
         try {
-            $job = $this->backup_manager->initiate_backup($backup_id, $include_files, $include_database, $requested_at);
+            $job = $this->backup_manager->initiate_backup($backup_id, $include_files, $include_database, $requested_at, $job_id);
 
             return new WP_REST_Response(array(
                 'success' => true,
