@@ -4,7 +4,7 @@ Tags: stack2, automation, plugin management, backup, inventory
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 1.0.1
+Stable tag: 1.0.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -48,6 +48,9 @@ Automatic scheduled sync relies on WP-Cron. Manual sync is available from plugin
 
 == Changelog ==
 
+= 1.0.2 =
+- Patch release.
+
 = 1.0.1 =
 - Patch release.
 
@@ -57,6 +60,9 @@ Automatic scheduled sync relies on WP-Cron. Manual sync is available from plugin
 - Added authenticated backup endpoints and supporting services.
 
 == Upgrade Notice ==
+
+= 1.0.2 =
+Patch release.
 
 = 1.0.1 =
 Patch release.
