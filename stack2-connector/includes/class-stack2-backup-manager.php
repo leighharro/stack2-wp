@@ -124,7 +124,7 @@ class Stack2_Backup_Manager
             'content_type' => 'application/octet-stream',
             'filename' => basename($absolute_path),
             'size' => (int) filesize($absolute_path),
-            'checksum' => hash_file('sha256', $absolute_path),
+            'checksum' => $this->get_file_checksum($absolute_path),
         );
     }
 
@@ -247,6 +247,25 @@ class Stack2_Backup_Manager
         }
 
         return $path;
+    }
+
+    private function get_file_checksum(string $absolute_path): string
+    {
+        $mtime = @filemtime($absolute_path);
+        if ($mtime === false) {
+            return hash_file('sha256', $absolute_path);
+        }
+
+        $cache_key = 'stack2_cksum_' . md5($absolute_path . ':' . $mtime);
+        $cached = get_transient($cache_key);
+        if ($cached !== false) {
+            return (string) $cached;
+        }
+
+        $checksum = hash_file('sha256', $absolute_path);
+        set_transient($cache_key, $checksum, WEEK_IN_SECONDS);
+
+        return $checksum;
     }
 
     private function sanitize_table_name(string $table_name): string

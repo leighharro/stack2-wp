@@ -120,31 +120,27 @@ class Stack2_Backup_Compressor
         );
     }
 
+    private const EXCLUSION_PATTERNS = array(
+        '/node_modules/',
+        '/.git/',
+        '/cache/',
+        '/wp-content/cache/',
+        '/wp-content/upgrade/',
+        '/.stack2-backup/',
+        '/uploads/tmp/',
+        '/uploads/cache/',
+    );
+
     private function should_exclude(string $path): bool
     {
         $normalized = wp_normalize_path($path);
-        $patterns = $this->get_exclusion_patterns();
 
-        foreach ($patterns as $pattern) {
+        foreach (self::EXCLUSION_PATTERNS as $pattern) {
             if (strpos($normalized, $pattern) !== false) {
                 return true;
             }
         }
 
         return false;
-    }
-
-    private function get_exclusion_patterns(): array
-    {
-        return array(
-            '/node_modules/',
-            '/.git/',
-            '/cache/',
-            '/wp-content/cache/',
-            '/wp-content/upgrade/',
-            '/.stack2-backup/',
-            '/uploads/tmp/',
-            '/uploads/cache/',
-        );
     }
 }

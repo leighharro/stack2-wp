@@ -20,33 +20,24 @@ class Stack2_Database_Dumper
         $host = defined('DB_HOST') ? DB_HOST : '';
         $host_parts = explode(':', $host, 2);
 
-        $size_bytes = (int) $wpdb->get_var(
-            $wpdb->prepare(
-                'SELECT COALESCE(SUM(data_length + index_length), 0) FROM information_schema.TABLES WHERE table_schema = %s',
-                DB_NAME
-            )
-        );
+        // SHOW TABLE STATUS avoids information_schema locking on large databases.
+        $table_status = $wpdb->get_results('SHOW TABLE STATUS', ARRAY_A);
+        $tables = array();
+        $size_bytes = 0;
 
-        $tables_count = (int) $wpdb->get_var(
-            $wpdb->prepare(
-                'SELECT COUNT(*) FROM information_schema.TABLES WHERE table_schema = %s',
-                DB_NAME
-            )
-        );
+        if (is_array($table_status)) {
+            foreach ($table_status as $row) {
+                $name = (string) ($row['Name'] ?? '');
+                if ($name === '') {
+                    continue;
+                }
+                $tables[] = $name;
+                $size_bytes += (int) ($row['Data_length'] ?? 0) + (int) ($row['Index_length'] ?? 0);
+            }
+            sort($tables);
+        }
 
-        $tables = $wpdb->get_col(
-            $wpdb->prepare(
-                'SELECT TABLE_NAME FROM information_schema.TABLES WHERE table_schema = %s ORDER BY TABLE_NAME ASC',
-                DB_NAME
-            )
-        );
-
-        $collation = (string) $wpdb->get_var(
-            $wpdb->prepare(
-                'SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = %s',
-                DB_NAME
-            )
-        );
+        $collation = (string) $wpdb->get_var('SELECT @@collation_database');
 
         return array(
             'host' => (string) ($host_parts[0] ?? ''),
@@ -55,8 +46,8 @@ class Stack2_Database_Dumper
             'charset' => (string) DB_CHARSET,
             'collation' => $collation !== '' ? $collation : (string) DB_COLLATE,
             'size_bytes' => $size_bytes,
-            'tables_count' => $tables_count,
-            'tables' => is_array($tables) ? array_values($tables) : array(),
+            'tables_count' => count($tables),
+            'tables' => $tables,
         );
     }
 
@@ -98,10 +89,11 @@ class Stack2_Database_Dumper
             fwrite($output, 'DROP TABLE IF EXISTS `' . $table . '`;' . "\n");
             fwrite($output, $create[1] . ';' . "\n\n");
 
-            // Fetch and process rows in chunks to avoid memory exhaustion
             $chunk_size = 1000;
             $offset = 0;
-            $table_has_rows = false;
+            $batch_size = 100;
+            $batch_values = array();
+            $columns_sql = '';
 
             while (true) {
                 $rows = $wpdb->get_results(
@@ -117,22 +109,26 @@ class Stack2_Database_Dumper
                     break;
                 }
 
-                $table_has_rows = true;
-
                 foreach ($rows as $row) {
-                    $columns = array_map(static function ($column) {
-                        return '`' . str_replace('`', '``', (string) $column) . '`';
-                    }, array_keys($row));
+                    if ($columns_sql === '') {
+                        $col_names = array_map(static function ($column) {
+                            return '`' . str_replace('`', '``', (string) $column) . '`';
+                        }, array_keys($row));
+                        $columns_sql = '(' . implode(',', $col_names) . ')';
+                    }
 
                     $values = array();
                     foreach ($row as $value) {
                         $values[] = $this->sql_value($value);
                     }
-
-                    $sql = 'INSERT INTO `' . $table . '` (' . implode(',', $columns) . ') VALUES (' . implode(',', $values) . ');' . "\n";
-                    fwrite($output, $sql);
-
+                    $batch_values[] = '(' . implode(',', $values) . ')';
                     $rows_processed++;
+
+                    if (count($batch_values) >= $batch_size) {
+                        fwrite($output, 'INSERT INTO `' . $table . '` ' . $columns_sql . ' VALUES ' . implode(',', $batch_values) . ";\n");
+                        $batch_values = array();
+                    }
+
                     $progress_callback(array(
                         'phase' => 'database_dump',
                         'files_processed' => 0,
@@ -149,7 +145,11 @@ class Stack2_Database_Dumper
                 $offset += $chunk_size;
             }
 
-            if ($table_has_rows) {
+            if (!empty($batch_values) && $columns_sql !== '') {
+                fwrite($output, 'INSERT INTO `' . $table . '` ' . $columns_sql . ' VALUES ' . implode(',', $batch_values) . ";\n");
+            }
+
+            if ($columns_sql !== '') {
                 fwrite($output, "\n");
             }
         }
@@ -186,25 +186,13 @@ class Stack2_Database_Dumper
         @set_time_limit(0);
         @ignore_user_abort(true);
 
-        $table_exists = (int) $wpdb->get_var(
-            $wpdb->prepare(
-                'SELECT COUNT(*) FROM information_schema.TABLES WHERE table_schema = %s AND table_name = %s',
-                DB_NAME,
-                $table_name
-            )
-        );
-
-        if ($table_exists <= 0) {
-            throw new RuntimeException('Requested database table is not available.');
-        }
-
         $safe_name = preg_replace('/[^A-Za-z0-9_\$]+/', '_', $table_name);
         $safe_name = is_string($safe_name) ? $safe_name : $table_name;
 
         $sql_file = trailingslashit($temp_dir) . 'database-table-' . $safe_name . '.sql';
         $gz_file = $sql_file . '.gz';
 
-        // Return the cached dump if it already exists and passes integrity check.
+        // Cache check before the existence query — serves retries from disk without a DB round-trip.
         if (file_exists($gz_file) && $this->verify_dump($gz_file)) {
             return array(
                 'file' => $gz_file,
@@ -212,6 +200,13 @@ class Stack2_Database_Dumper
                 'table' => $table_name,
                 'rows_processed' => 0,
             );
+        }
+
+        // SHOW TABLES LIKE is faster than information_schema.TABLES on large databases.
+        $like = $wpdb->esc_like($table_name);
+        $found = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $like));
+        if ($found !== $table_name) {
+            throw new RuntimeException('Requested database table is not available.');
         }
 
         $output = fopen($sql_file, 'wb');
@@ -235,10 +230,12 @@ class Stack2_Database_Dumper
         fwrite($output, 'DROP TABLE IF EXISTS `' . $escaped_table . '`;' . "\n");
         fwrite($output, $create[1] . ';' . "\n\n");
 
-        // Fetch and process rows in chunks to avoid memory exhaustion
         $rows_processed = 0;
         $chunk_size = 1000;
         $offset = 0;
+        $batch_size = 100;
+        $batch_values = array();
+        $columns_sql = '';
 
         while (true) {
             $rows = $wpdb->get_results(
@@ -255,21 +252,31 @@ class Stack2_Database_Dumper
             }
 
             foreach ($rows as $row) {
-                $columns = array_map(static function ($column) {
-                    return '`' . str_replace('`', '``', (string) $column) . '`';
-                }, array_keys($row));
+                if ($columns_sql === '') {
+                    $col_names = array_map(static function ($column) {
+                        return '`' . str_replace('`', '``', (string) $column) . '`';
+                    }, array_keys($row));
+                    $columns_sql = '(' . implode(',', $col_names) . ')';
+                }
 
                 $values = array();
                 foreach ($row as $value) {
                     $values[] = $this->sql_value($value);
                 }
-
-                $sql = 'INSERT INTO `' . $escaped_table . '` (' . implode(',', $columns) . ') VALUES (' . implode(',', $values) . ');' . "\n";
-                fwrite($output, $sql);
+                $batch_values[] = '(' . implode(',', $values) . ')';
                 $rows_processed++;
+
+                if (count($batch_values) >= $batch_size) {
+                    fwrite($output, 'INSERT INTO `' . $escaped_table . '` ' . $columns_sql . ' VALUES ' . implode(',', $batch_values) . ";\n");
+                    $batch_values = array();
+                }
             }
 
             $offset += $chunk_size;
+        }
+
+        if (!empty($batch_values) && $columns_sql !== '') {
+            fwrite($output, 'INSERT INTO `' . $escaped_table . '` ' . $columns_sql . ' VALUES ' . implode(',', $batch_values) . ";\n");
         }
 
         fwrite($output, "\nSET FOREIGN_KEY_CHECKS=1;\n");
