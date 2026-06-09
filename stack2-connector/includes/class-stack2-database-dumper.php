@@ -181,6 +181,11 @@ class Stack2_Database_Dumper
             throw new RuntimeException('Invalid database table name.');
         }
 
+        // Allow the dump to complete even if the proxy closes the connection early (504).
+        // PHP will finish writing the file so the next retry can serve the cached result.
+        @set_time_limit(0);
+        @ignore_user_abort(true);
+
         $table_exists = (int) $wpdb->get_var(
             $wpdb->prepare(
                 'SELECT COUNT(*) FROM information_schema.TABLES WHERE table_schema = %s AND table_name = %s',
@@ -198,6 +203,16 @@ class Stack2_Database_Dumper
 
         $sql_file = trailingslashit($temp_dir) . 'database-table-' . $safe_name . '.sql';
         $gz_file = $sql_file . '.gz';
+
+        // Return the cached dump if it already exists and passes integrity check.
+        if (file_exists($gz_file) && $this->verify_dump($gz_file)) {
+            return array(
+                'file' => $gz_file,
+                'size_bytes' => (int) filesize($gz_file),
+                'table' => $table_name,
+                'rows_processed' => 0,
+            );
+        }
 
         $output = fopen($sql_file, 'wb');
         if ($output === false) {
