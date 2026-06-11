@@ -124,15 +124,32 @@ Response:
 
 Where `base64url_table_name` encodes e.g. `wp_options`.
 
-Response:
+**200 response** (first request — dump streamed inline):
 
-- Binary stream (`.sql.gz`)
+- Binary stream (`.sql.gz`) written directly to the HTTP response as rows are fetched from the database.
+- The proxy never times out because bytes flow continuously from the first row.
+- Headers include:
+  - `Content-Type`
+  - `Content-Disposition`
+  - `X-Backup-Database-Table`
+- `Content-Length` and `X-Backup-Checksum-SHA256` are **absent** on the first response because the total size and hash are only known after the stream completes.
+- The dump is saved to a server-side cache file while it streams. Subsequent requests for the same `job_id` + table are served from cache and include `Content-Length` and `X-Backup-Checksum-SHA256`.
+
+**200 response** (cached — full headers):
+
+- Binary stream (`.sql.gz`) served from the server-side cache.
 - Headers include:
   - `Content-Type`
   - `Content-Disposition`
   - `Content-Length`
   - `X-Backup-Checksum-SHA256`
   - `X-Backup-Database-Table`
+
+Notes:
+
+- On the first download, skip checksum verification (header absent). The file is complete if HTTP 200 is received and the response body is non-empty and valid gzip.
+- To force checksum verification, download the same table a second time — the cached response will include `X-Backup-Checksum-SHA256`.
+- The response is always synchronous (no 202). There is no need to poll or retry after a wait.
 
 ### 4) Cleanup generated artifacts
 

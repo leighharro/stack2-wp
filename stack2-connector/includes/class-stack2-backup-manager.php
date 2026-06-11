@@ -154,6 +154,54 @@ class Stack2_Backup_Manager
         );
     }
 
+    public function stream_database_table_to_output(string $job_id, string $table_name): void
+    {
+        $table_name = $this->sanitize_table_name($table_name);
+        if ($table_name === '') {
+            throw new RuntimeException('Invalid table name.');
+        }
+
+        $temp_dir = trailingslashit($this->get_base_backup_dir()) . $job_id;
+        wp_mkdir_p($temp_dir);
+
+        $this->database_dumper->stream_table_to_output_and_cache($temp_dir, $table_name);
+    }
+
+    public function get_cached_database_table_file(string $job_id, string $table_name): ?array
+    {
+        $table_name = $this->sanitize_table_name($table_name);
+        if ($table_name === '') {
+            return null;
+        }
+
+        $temp_dir = trailingslashit($this->get_base_backup_dir()) . $job_id;
+        $dump = $this->database_dumper->get_table_dump_if_exists($temp_dir, $table_name);
+        $file = (string) ($dump['file'] ?? '');
+
+        if ($file === '' || !is_file($file) || !is_readable($file)) {
+            return null;
+        }
+
+        return array(
+            'path' => $file,
+            'table' => $table_name,
+            'content_type' => 'application/gzip',
+            'filename' => basename($file),
+            'size' => (int) filesize($file),
+            'checksum' => hash_file('sha256', $file),
+        );
+    }
+
+    public function database_table_exists(string $table_name): bool
+    {
+        $table_name = $this->sanitize_table_name($table_name);
+        if ($table_name === '') {
+            return false;
+        }
+
+        return $this->database_dumper->table_exists($table_name);
+    }
+
     public function cleanup_backup(string $job_id): ?array
     {
         $temp_dir = trailingslashit($this->get_base_backup_dir()) . sanitize_key($job_id);

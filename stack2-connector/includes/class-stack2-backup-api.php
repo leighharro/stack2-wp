@@ -275,28 +275,57 @@ class Stack2_Backup_API
             return new WP_REST_Response(array('success' => false, 'error' => 'Invalid encoded table name.'), 400);
         }
 
-        try {
-            $component_file = $this->backup_manager->get_backup_database_table_file($job_id, $table_name);
-        } catch (RuntimeException $e) {
-            return new WP_REST_Response(array('success' => false, 'error' => $e->getMessage()), 400);
+        // Fast path: serve the pre-generated cached dump with full headers.
+        $component_file = $this->backup_manager->get_cached_database_table_file($job_id, $table_name);
+
+        if (is_array($component_file)) {
+            $file_path = $component_file['path'];
+            if (!file_exists($file_path)) {
+                return new WP_REST_Response(array('success' => false, 'error' => 'Database table backup file missing.'), 404);
+            }
+
+            header('Content-Type: ' . $component_file['content_type']);
+            header('Content-Disposition: attachment; filename=' . basename($component_file['filename']));
+            header('Content-Length: ' . (string) $component_file['size']);
+            header('X-Backup-Checksum-SHA256: ' . $component_file['checksum']);
+            header('X-Backup-Database-Table: ' . rawurlencode((string) ($component_file['table'] ?? '')));
+
+            $this->stream_file_download($file_path);
+            return; // stream_file_download exits; this is unreachable but keeps the type checker happy
         }
 
-        if (!is_array($component_file)) {
+        // Dump not cached yet. Verify the table exists before streaming.
+        if (!$this->backup_manager->database_table_exists($table_name)) {
             return new WP_REST_Response(array('success' => false, 'error' => 'Database table backup is not available.'), 404);
         }
 
-        $file_path = $component_file['path'];
-        if (!file_exists($file_path)) {
-            return new WP_REST_Response(array('success' => false, 'error' => 'Database table backup file missing.'), 404);
+        // Stream the SQL dump directly to the HTTP response as rows are fetched.
+        // The proxy sees data flowing from the first flush, so it never times out
+        // regardless of table size or server environment.
+        // Content-Length and X-Backup-Checksum-SHA256 are omitted on this first
+        // response because the values are only known after generation completes.
+        // The dump is saved to the cache file simultaneously, so all subsequent
+        // requests are served from cache with full headers.
+        @ini_set('zlib.output_compression', '0');
+        while (ob_get_level() > 0) {
+            @ob_end_clean();
         }
 
-        header('Content-Type: ' . $component_file['content_type']);
-        header('Content-Disposition: attachment; filename=' . basename($component_file['filename']));
-        header('Content-Length: ' . (string) $component_file['size']);
-        header('X-Backup-Checksum-SHA256: ' . $component_file['checksum']);
-        header('X-Backup-Database-Table: ' . rawurlencode((string) ($component_file['table'] ?? '')));
+        header('Content-Type: application/gzip');
+        header('Content-Disposition: attachment; filename=database-table-' . $table_name . '.sql.gz');
+        header('X-Backup-Database-Table: ' . rawurlencode($table_name));
 
-        $this->stream_file_download($file_path);
+        try {
+            $this->backup_manager->stream_database_table_to_output($job_id, $table_name);
+        } catch (RuntimeException $e) {
+            $this->logger->error('Table dump streaming failed.', array(
+                'job_id'  => $job_id,
+                'table'   => $table_name,
+                'error'   => $e->getMessage(),
+            ));
+        }
+
+        exit;
     }
 
     public function cleanup_backup(WP_REST_Request $request): WP_REST_Response

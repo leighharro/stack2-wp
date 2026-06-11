@@ -298,6 +298,175 @@ class Stack2_Database_Dumper
         );
     }
 
+    public function stream_table_to_output_and_cache(string $temp_dir, string $table_name): void
+    {
+        global $wpdb;
+
+        if (!preg_match('/^[A-Za-z0-9_\$]+$/', $table_name)) {
+            throw new RuntimeException('Invalid database table name.');
+        }
+
+        @set_time_limit(0);
+
+        $safe_name = preg_replace('/[^A-Za-z0-9_\$]+/', '_', $table_name);
+        $safe_name = is_string($safe_name) ? $safe_name : $table_name;
+        $gz_file = trailingslashit($temp_dir) . 'database-table-' . $safe_name . '.sql.gz';
+        $escaped = str_replace('`', '``', $table_name);
+
+        $gz_out = gzopen('php://output', 'wb6');
+        $gz_cache = gzopen($gz_file, 'wb6');
+
+        if ($gz_out === false) {
+            if ($gz_cache !== false) {
+                gzclose($gz_cache);
+            }
+            throw new RuntimeException('Unable to open gzip output stream.');
+        }
+
+        if ($gz_cache === false) {
+            gzclose($gz_out);
+            throw new RuntimeException('Unable to create table SQL dump file.');
+        }
+
+        $success = false;
+        try {
+            $header = "-- Stack2 WordPress table backup\n"
+                . '-- Table ' . $table_name . "\n"
+                . '-- Generated at ' . gmdate('c') . "\n\n"
+                . 'SET FOREIGN_KEY_CHECKS=0;' . "\n\n";
+
+            gzwrite($gz_out, $header);
+            gzwrite($gz_cache, $header);
+
+            $create = $wpdb->get_row("SHOW CREATE TABLE `{$escaped}`", ARRAY_N);
+            if (!is_array($create) || !isset($create[1])) {
+                throw new RuntimeException('Unable to export table schema.');
+            }
+
+            $schema = 'DROP TABLE IF EXISTS `' . $escaped . '`;' . "\n"
+                . $create[1] . ';' . "\n\n";
+
+            gzwrite($gz_out, $schema);
+            gzwrite($gz_cache, $schema);
+
+            // Flush schema immediately so the proxy read timeout resets right away.
+            gzflush($gz_out, ZLIB_SYNC_FLUSH);
+            flush();
+
+            $chunk_size = 1000;
+            $batch_size = 100;
+            $offset = 0;
+            $batch_values = array();
+            $columns_sql = '';
+
+            while (true) {
+                $rows = $wpdb->get_results(
+                    $wpdb->prepare(
+                        "SELECT * FROM `{$escaped}` LIMIT %d OFFSET %d",
+                        $chunk_size,
+                        $offset
+                    ),
+                    ARRAY_A
+                );
+
+                if (!is_array($rows) || empty($rows)) {
+                    break;
+                }
+
+                foreach ($rows as $row) {
+                    if ($columns_sql === '') {
+                        $col_names = array_map(static function ($col) {
+                            return '`' . str_replace('`', '``', (string) $col) . '`';
+                        }, array_keys($row));
+                        $columns_sql = '(' . implode(',', $col_names) . ')';
+                    }
+
+                    $values = array();
+                    foreach ($row as $value) {
+                        $values[] = $this->sql_value($value);
+                    }
+                    $batch_values[] = '(' . implode(',', $values) . ')';
+
+                    if (count($batch_values) >= $batch_size) {
+                        $sql = 'INSERT INTO `' . $escaped . '` ' . $columns_sql . ' VALUES ' . implode(',', $batch_values) . ";\n";
+                        gzwrite($gz_out, $sql);
+                        gzwrite($gz_cache, $sql);
+                        $batch_values = array();
+                    }
+                }
+
+                // Flush each 1000-row chunk to prevent the proxy read timeout from firing.
+                if (!empty($batch_values) && $columns_sql !== '') {
+                    $sql = 'INSERT INTO `' . $escaped . '` ' . $columns_sql . ' VALUES ' . implode(',', $batch_values) . ";\n";
+                    gzwrite($gz_out, $sql);
+                    gzwrite($gz_cache, $sql);
+                    $batch_values = array();
+                }
+
+                gzflush($gz_out, ZLIB_SYNC_FLUSH);
+                flush();
+
+                if (connection_aborted()) {
+                    break;
+                }
+
+                $offset += $chunk_size;
+            }
+
+            $footer = "\nSET FOREIGN_KEY_CHECKS=1;\n";
+            gzwrite($gz_out, $footer);
+            gzwrite($gz_cache, $footer);
+
+            $success = true;
+        } finally {
+            gzclose($gz_out);
+            gzclose($gz_cache);
+
+            if (!$success || !$this->verify_dump($gz_file)) {
+                @unlink($gz_file);
+            }
+        }
+    }
+
+    public function get_table_dump_if_exists(string $temp_dir, string $table_name): array
+    {
+        if (!preg_match('/^[A-Za-z0-9_\$]+$/', $table_name)) {
+            return array();
+        }
+
+        $safe_name = preg_replace('/[^A-Za-z0-9_\$]+/', '_', $table_name);
+        $safe_name = is_string($safe_name) ? $safe_name : $table_name;
+        $gz_file = trailingslashit($temp_dir) . 'database-table-' . $safe_name . '.sql.gz';
+
+        if (!file_exists($gz_file) || !$this->verify_dump($gz_file)) {
+            return array();
+        }
+
+        return array(
+            'file' => $gz_file,
+            'size_bytes' => (int) filesize($gz_file),
+            'table' => $table_name,
+            'rows_processed' => 0,
+        );
+    }
+
+    public function table_exists(string $table_name): bool
+    {
+        global $wpdb;
+
+        if (!preg_match('/^[A-Za-z0-9_\$]+$/', $table_name)) {
+            return false;
+        }
+
+        return (int) $wpdb->get_var(
+            $wpdb->prepare(
+                'SELECT COUNT(*) FROM information_schema.TABLES WHERE table_schema = %s AND table_name = %s',
+                DB_NAME,
+                $table_name
+            )
+        ) > 0;
+    }
+
     private function compress_sql_dump(string $sql_file, string $gz_file): void
     {
         // Use streaming compression to avoid loading entire file into memory
