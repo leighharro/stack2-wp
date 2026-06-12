@@ -307,26 +307,42 @@ class Stack2_Database_Dumper
         }
 
         @set_time_limit(0);
+        @ignore_user_abort(true);
 
         $safe_name = preg_replace('/[^A-Za-z0-9_\$]+/', '_', $table_name);
         $safe_name = is_string($safe_name) ? $safe_name : $table_name;
         $gz_file = trailingslashit($temp_dir) . 'database-table-' . $safe_name . '.sql.gz';
         $escaped = str_replace('`', '``', $table_name);
 
-        $gz_out = gzopen('php://output', 'wb6');
-        $gz_cache = gzopen($gz_file, 'wb6');
+        // gzopen requires a seekable stream; php://output is not seekable, so we
+        // use deflate_init which works with any fwrite-capable handle.
+        $ctx = deflate_init(ZLIB_ENCODING_GZIP, array('level' => 6));
+        if ($ctx === false) {
+            throw new RuntimeException('Unable to initialize gzip compressor.');
+        }
 
-        if ($gz_out === false) {
-            if ($gz_cache !== false) {
-                gzclose($gz_cache);
+        $out = fopen('php://output', 'wb');
+        $cache_fh = fopen($gz_file, 'wb');
+
+        if ($out === false) {
+            if ($cache_fh !== false) {
+                fclose($cache_fh);
             }
             throw new RuntimeException('Unable to open gzip output stream.');
         }
 
-        if ($gz_cache === false) {
-            gzclose($gz_out);
+        if ($cache_fh === false) {
+            fclose($out);
             throw new RuntimeException('Unable to create table SQL dump file.');
         }
+
+        $write_compressed = function (string $raw, int $flush_mode) use ($ctx, $out, $cache_fh): void {
+            $chunk = deflate_add($ctx, $raw, $flush_mode);
+            if ($chunk !== false && $chunk !== '') {
+                fwrite($out, $chunk);
+                fwrite($cache_fh, $chunk);
+            }
+        };
 
         $success = false;
         try {
@@ -335,8 +351,7 @@ class Stack2_Database_Dumper
                 . '-- Generated at ' . gmdate('c') . "\n\n"
                 . 'SET FOREIGN_KEY_CHECKS=0;' . "\n\n";
 
-            gzwrite($gz_out, $header);
-            gzwrite($gz_cache, $header);
+            $write_compressed($header, ZLIB_NO_FLUSH);
 
             $create = $wpdb->get_row("SHOW CREATE TABLE `{$escaped}`", ARRAY_N);
             if (!is_array($create) || !isset($create[1])) {
@@ -346,11 +361,8 @@ class Stack2_Database_Dumper
             $schema = 'DROP TABLE IF EXISTS `' . $escaped . '`;' . "\n"
                 . $create[1] . ';' . "\n\n";
 
-            gzwrite($gz_out, $schema);
-            gzwrite($gz_cache, $schema);
-
             // Flush schema immediately so the proxy read timeout resets right away.
-            gzflush($gz_out, ZLIB_SYNC_FLUSH);
+            $write_compressed($schema, ZLIB_SYNC_FLUSH);
             flush();
 
             $chunk_size = 1000;
@@ -389,8 +401,7 @@ class Stack2_Database_Dumper
 
                     if (count($batch_values) >= $batch_size) {
                         $sql = 'INSERT INTO `' . $escaped . '` ' . $columns_sql . ' VALUES ' . implode(',', $batch_values) . ";\n";
-                        gzwrite($gz_out, $sql);
-                        gzwrite($gz_cache, $sql);
+                        $write_compressed($sql, ZLIB_NO_FLUSH);
                         $batch_values = array();
                     }
                 }
@@ -398,12 +409,11 @@ class Stack2_Database_Dumper
                 // Flush each 1000-row chunk to prevent the proxy read timeout from firing.
                 if (!empty($batch_values) && $columns_sql !== '') {
                     $sql = 'INSERT INTO `' . $escaped . '` ' . $columns_sql . ' VALUES ' . implode(',', $batch_values) . ";\n";
-                    gzwrite($gz_out, $sql);
-                    gzwrite($gz_cache, $sql);
+                    $write_compressed($sql, ZLIB_NO_FLUSH);
                     $batch_values = array();
                 }
 
-                gzflush($gz_out, ZLIB_SYNC_FLUSH);
+                $write_compressed('', ZLIB_SYNC_FLUSH);
                 flush();
 
                 if (connection_aborted()) {
@@ -414,13 +424,12 @@ class Stack2_Database_Dumper
             }
 
             $footer = "\nSET FOREIGN_KEY_CHECKS=1;\n";
-            gzwrite($gz_out, $footer);
-            gzwrite($gz_cache, $footer);
+            $write_compressed($footer, ZLIB_FINISH);
 
             $success = true;
         } finally {
-            gzclose($gz_out);
-            gzclose($gz_cache);
+            fclose($out);
+            fclose($cache_fh);
 
             if (!$success || !$this->verify_dump($gz_file)) {
                 @unlink($gz_file);
