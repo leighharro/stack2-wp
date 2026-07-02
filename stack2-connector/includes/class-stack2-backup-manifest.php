@@ -54,15 +54,59 @@ class Stack2_Backup_Manifest
         }
 
         $sanitized = array();
+        $seen_paths = array();
+
         foreach ($files as $file) {
-            $value = trim((string) $file);
-            if ($value === '') {
+            if (is_string($file)) {
+                $file = array('path' => $file);
+            }
+
+            if (!is_array($file) || !isset($file['path'])) {
                 continue;
             }
-            $sanitized[] = $value;
+
+            $path = $this->sanitize_relative_path((string) $file['path']);
+            if ($path === '' || isset($seen_paths[$path])) {
+                continue;
+            }
+
+            $sha256 = isset($file['sha256']) ? strtolower(trim((string) $file['sha256'])) : '';
+            if ($sha256 !== '' && !preg_match('/^[a-f0-9]{64}$/', $sha256)) {
+                continue;
+            }
+
+            $size = isset($file['size']) ? (int) $file['size'] : 0;
+            if ($size < 0) {
+                $size = 0;
+            }
+
+            $seen_paths[$path] = true;
+            $sanitized[] = array(
+                'path' => $path,
+                'sha256' => $sha256,
+                'size' => $size,
+            );
         }
 
-        return array_values(array_unique($sanitized));
+        return $sanitized;
+    }
+
+    private function sanitize_relative_path(string $relative_path): string
+    {
+        $path = trim($relative_path);
+        if ($path === '' || strpos($path, "\0") !== false) {
+            return '';
+        }
+
+        $path = wp_normalize_path($path);
+        $path = ltrim($path, '/');
+        $path = preg_replace('#^\./+#', '', $path);
+
+        if ($path === '' || strpos($path, '../') !== false || $path === '..') {
+            return '';
+        }
+
+        return $path;
     }
 
     private function sanitize_manifest_tables($tables): array

@@ -77,6 +77,12 @@ class Stack2_Backup_API
             'permission_callback' => '__return_true',
         ));
 
+        register_rest_route('stack2/v1', '/backups/(?P<job_id>[A-Za-z0-9_-]+)/files/(?P<encoded_path>[A-Za-z0-9_-]+)/metadata', array(
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => array($this, 'get_file_metadata'),
+            'permission_callback' => '__return_true',
+        ));
+
         register_rest_route('stack2/v1', '/backups/(?P<job_id>[A-Za-z0-9_-]+)/database/table/(?P<encoded_table>[A-Za-z0-9_-]+)', array(
             'methods' => WP_REST_Server::READABLE,
             'callback' => array($this, 'download_database_table'),
@@ -92,6 +98,12 @@ class Stack2_Backup_API
         register_rest_route('stack2/v1', '/backup/(?P<job_id>[A-Za-z0-9_-]+)/files/(?P<encoded_path>[A-Za-z0-9_-]+)', array(
             'methods' => WP_REST_Server::READABLE,
             'callback' => array($this, 'download_manifest_file'),
+            'permission_callback' => '__return_true',
+        ));
+
+        register_rest_route('stack2/v1', '/backup/(?P<job_id>[A-Za-z0-9_-]+)/files/(?P<encoded_path>[A-Za-z0-9_-]+)/metadata', array(
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => array($this, 'get_file_metadata'),
             'permission_callback' => '__return_true',
         ));
 
@@ -257,6 +269,35 @@ class Stack2_Backup_API
         header('X-Backup-Relative-Path: ' . rawurlencode((string) ($component_file['relative_path'] ?? '')));
 
         $this->stream_file_download($file_path);
+    }
+
+    public function get_file_metadata(WP_REST_Request $request): WP_REST_Response
+    {
+        $job_id = sanitize_text_field((string) $request->get_param('job_id'));
+        $encoded_path = sanitize_text_field((string) $request->get_param('encoded_path'));
+        $path = $this->get_signed_path($request);
+
+        $auth = $this->verify($request, 'GET', $path, '');
+        if (is_wp_error($auth)) {
+            return $this->error_response_from_wp_error($auth);
+        }
+
+        $relative_path = $this->decode_relative_path($encoded_path);
+        if ($relative_path === '') {
+            return new WP_REST_Response(array('success' => false, 'error' => 'Invalid encoded file path.'), 400);
+        }
+
+        $metadata = $this->backup_manager->get_backup_manifest_file_metadata($job_id, $relative_path);
+        if (!is_array($metadata)) {
+            return new WP_REST_Response(array('success' => false, 'error' => 'Backup file not available.'), 404);
+        }
+
+        return new WP_REST_Response(array(
+            'success' => true,
+            'path' => $metadata['path'],
+            'sha256' => $metadata['sha256'],
+            'size' => $metadata['size'],
+        ), 200);
     }
 
     public function download_database_table(WP_REST_Request $request)

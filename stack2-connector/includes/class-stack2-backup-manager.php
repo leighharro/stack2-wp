@@ -128,6 +128,32 @@ class Stack2_Backup_Manager
         );
     }
 
+    public function get_backup_manifest_file_metadata(string $job_id, string $relative_path): ?array
+    {
+        $relative_path = $this->sanitize_relative_path($relative_path);
+        if ($relative_path === '') {
+            return null;
+        }
+
+        $absolute_path = trailingslashit(ABSPATH) . $relative_path;
+        $normalized_absolute = wp_normalize_path($absolute_path);
+        $normalized_root = trailingslashit(wp_normalize_path(ABSPATH));
+
+        if (strpos($normalized_absolute, $normalized_root) !== 0) {
+            return null;
+        }
+
+        if (!is_file($absolute_path) || !is_readable($absolute_path)) {
+            return null;
+        }
+
+        return array(
+            'path' => $relative_path,
+            'sha256' => strtolower($this->get_file_checksum($absolute_path)),
+            'size' => (int) filesize($absolute_path),
+        );
+    }
+
     public function get_backup_database_table_file(string $job_id, string $table_name): ?array
     {
         $table_name = $this->sanitize_table_name($table_name);

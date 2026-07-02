@@ -43,8 +43,10 @@ class Stack2_Backup_Compressor
             $totals['bytes_total'] += (int) $file->getSize();
 
             if ($include_manifest_files) {
-                $relative_path = ltrim(str_replace(ABSPATH, '', $path), '/');
-                $totals['files'][] = $relative_path;
+                $metadata = $this->build_file_metadata($path);
+                if ($metadata !== null) {
+                    $totals['files'][] = $metadata;
+                }
             }
         }
 
@@ -90,9 +92,14 @@ class Stack2_Backup_Compressor
                 continue;
             }
 
-            $relative_path = ltrim(str_replace(ABSPATH, '', $absolute_path), '/');
+            $relative_path = $this->normalize_relative_path($absolute_path);
+            $metadata = $this->build_file_metadata($absolute_path);
+            if ($metadata === null) {
+                continue;
+            }
+
             $zip->addFile($absolute_path, $relative_path);
-            $manifest_files[] = $relative_path;
+            $manifest_files[] = $metadata;
 
             $files_processed++;
             $bytes_processed += (int) $file->getSize();
@@ -129,6 +136,11 @@ class Stack2_Backup_Compressor
         '/.stack2-backup/',
         '/uploads/tmp/',
         '/uploads/cache/',
+        '/wp-content/ai1wm-backups/',
+        '/wp-content/updraft/',
+        '/wp-content/wpvivid/',
+        '/wp-content/backwpup-',
+        '/wp-snapshots/',
     );
 
     private function should_exclude(string $path): bool
@@ -142,5 +154,73 @@ class Stack2_Backup_Compressor
         }
 
         return false;
+    }
+
+    private function build_file_metadata(string $absolute_path): ?array
+    {
+        if (!is_file($absolute_path) || !is_readable($absolute_path)) {
+            return null;
+        }
+
+        $size = @filesize($absolute_path);
+        if ($size === false) {
+            return null;
+        }
+
+        $sha256 = $this->get_cached_file_checksum($absolute_path);
+        if ($sha256 === '') {
+            return null;
+        }
+
+        $relative_path = $this->normalize_relative_path($absolute_path);
+
+        return array(
+            'path' => $relative_path,
+            'sha256' => strtolower($sha256),
+            'size' => (int) $size,
+        );
+    }
+
+    private function get_cached_file_checksum(string $absolute_path): string
+    {
+        $mtime = @filemtime($absolute_path);
+        if ($mtime === false) {
+            $checksum = @hash_file('sha256', $absolute_path);
+            return $checksum === false ? '' : $checksum;
+        }
+
+        $cache_key = 'stack2_cksum_' . md5($absolute_path . ':' . $mtime);
+        $cached = get_transient($cache_key);
+        if ($cached !== false) {
+            return (string) $cached;
+        }
+
+        $checksum = @hash_file('sha256', $absolute_path);
+        if ($checksum === false) {
+            return '';
+        }
+
+        set_transient($cache_key, $checksum, WEEK_IN_SECONDS);
+
+        return $checksum;
+    }
+
+    private function normalize_relative_path(string $absolute_path): string
+    {
+        $normalized = wp_normalize_path($absolute_path);
+        $root = trailingslashit(wp_normalize_path(ABSPATH));
+
+        if (strpos($normalized, $root) === 0) {
+            $relative = substr($normalized, strlen($root));
+        } else {
+            $relative = ltrim($normalized, '/');
+        }
+
+        $relative = ltrim($relative, '/');
+        if (strpos($relative, './') === 0) {
+            $relative = substr($relative, 2);
+        }
+
+        return $relative;
     }
 }
