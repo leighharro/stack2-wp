@@ -15,6 +15,7 @@ class Stack2_Settings_Page
         add_action('admin_menu', array($this, 'register_menu'));
         add_action('admin_post_stack2_save_settings', array($this, 'handle_save_settings'));
         add_action('admin_post_stack2_sync_now', array($this, 'handle_sync_now'));
+        add_action('admin_post_stack2_check_updates', array($this, 'handle_check_updates'));
     }
 
     public function register_menu(): void
@@ -43,6 +44,7 @@ class Stack2_Settings_Page
         $last_status = (string) get_option(Stack2_Plugin::OPTION_LAST_SYNC_STATUS, 'never');
         $last_error = (string) get_option(Stack2_Plugin::OPTION_LAST_SYNC_ERROR, '');
         $debug = (bool) get_option(Stack2_Logger::OPTION_DEBUG, false);
+        $release_info = $this->plugin->get_update_checker()->get_cached_release_info();
 
         $masked_api_key = $this->mask_api_key($api_key);
         $notice = get_transient('stack2_admin_notice');
@@ -111,6 +113,20 @@ class Stack2_Settings_Page
             <p><strong>Status:</strong> <?php echo esc_html($last_status); ?></p>
             <p><strong>At:</strong> <?php echo esc_html($last_at === '' ? 'N/A' : $last_at); ?></p>
             <p><strong>Error:</strong> <?php echo esc_html($last_error === '' ? 'None' : $last_error); ?></p>
+
+            <hr />
+
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('stack2_check_updates'); ?>
+                <input type="hidden" name="action" value="stack2_check_updates" />
+                <?php submit_button('Check for Updates', 'secondary', 'submit', false); ?>
+            </form>
+
+            <h2>Updates</h2>
+            <p><strong>Current Version:</strong> <?php echo esc_html(STACK2_CONNECTOR_VERSION); ?></p>
+            <p><strong>Latest Known Version:</strong> <?php echo esc_html($release_info !== null ? $release_info['version'] : 'Unknown (not checked yet)'); ?></p>
+            <p><strong>Last Checked:</strong> <?php echo esc_html($release_info !== null ? gmdate('c', $release_info['checked_at']) : 'Never'); ?></p>
+            <p class="description">Updates are fetched from <a href="https://github.com/leighharro/stack2-wp/releases/latest" target="_blank" rel="noopener noreferrer">GitHub Releases</a> and installed the same way as any other WordPress plugin update, including WordPress's built-in "Enable auto-updates" option on the Plugins page.</p>
         </div>
         <?php
     }
@@ -178,6 +194,32 @@ class Stack2_Settings_Page
         $result = $this->plugin->sync_inventory('manual', 0);
         $notice_type = $result['success'] ? 'success' : 'error';
         $message = $result['success'] ? 'Manual sync completed successfully.' : 'Manual sync failed: ' . ($result['error'] ?? 'Unknown error');
+
+        set_transient('stack2_admin_notice', array('type' => $notice_type, 'message' => $message), 30);
+        wp_safe_redirect(admin_url('options-general.php?page=stack2-connector'));
+        exit;
+    }
+
+    public function handle_check_updates(): void
+    {
+        if (!current_user_can('manage_options')) {
+            wp_die('Forbidden', 403);
+        }
+
+        check_admin_referer('stack2_check_updates');
+
+        $result = $this->plugin->get_update_checker()->force_check();
+
+        if (!$result['success']) {
+            $message = 'Update check failed: ' . ($result['error'] ?? 'Unknown error');
+            $notice_type = 'error';
+        } elseif ($result['has_update']) {
+            $message = sprintf('Update available: version %s. Visit the Plugins page to install it.', $result['latest_version']);
+            $notice_type = 'success';
+        } else {
+            $message = sprintf('Already up to date (version %s).', STACK2_CONNECTOR_VERSION);
+            $notice_type = 'success';
+        }
 
         set_transient('stack2_admin_notice', array('type' => $notice_type, 'message' => $message), 30);
         wp_safe_redirect(admin_url('options-general.php?page=stack2-connector'));

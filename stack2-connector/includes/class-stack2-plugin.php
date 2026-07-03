@@ -23,6 +23,7 @@ class Stack2_Plugin
     private Stack2_Inventory_Collector $inventory_collector;
     private Stack2_Http_Client $http_client;
     private Stack2_Backup_Manager $backup_manager;
+    private Stack2_Update_Checker $update_checker;
 
     public function __construct()
     {
@@ -30,6 +31,7 @@ class Stack2_Plugin
         $this->signature_service = new Stack2_Signature_Service();
         $this->inventory_collector = new Stack2_Inventory_Collector();
         $this->http_client = new Stack2_Http_Client($this->signature_service);
+        $this->update_checker = new Stack2_Update_Checker($this->logger);
 
         $this->backup_manager = new Stack2_Backup_Manager(
             $this->logger,
@@ -45,6 +47,8 @@ class Stack2_Plugin
         add_action('rest_api_init', array($this, 'register_rest_controller'));
         add_action(self::CRON_HOOK_SYNC, array($this, 'handle_scheduled_sync'), 10, 2);
         add_filter('cron_schedules', array($this, 'register_cron_schedule'));
+
+        $this->update_checker->bootstrap();
 
         new Stack2_Settings_Page($this);
     }
@@ -194,6 +198,11 @@ class Stack2_Plugin
     public function get_backup_manager(): Stack2_Backup_Manager
     {
         return $this->backup_manager;
+    }
+
+    public function get_update_checker(): Stack2_Update_Checker
+    {
+        return $this->update_checker;
     }
 
     private function record_sync_status(bool $success, string $error): void

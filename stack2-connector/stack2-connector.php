@@ -2,10 +2,11 @@
 /**
  * Plugin Name: Stack2 Connector
  * Description: Sync plugin inventory to Stack2 and execute signed remote plugin commands.
- * Version: 1.0.7
+ * Version: 1.1.0
  * Author: Stack2
  * Requires at least: 6.0
 * Requires PHP: 7.4
+ * Update URI: https://github.com/leighharro/stack2-wp
  * Text Domain: stack2-connector
  */
 
@@ -13,7 +14,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('STACK2_CONNECTOR_VERSION', '1.0.7');
+define('STACK2_CONNECTOR_VERSION', '1.1.0');
 define('STACK2_CONNECTOR_PATH', plugin_dir_path(__FILE__));
 define('STACK2_CONNECTOR_URL', plugin_dir_url(__FILE__));
 
@@ -31,6 +32,7 @@ require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-cleaner.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-manager.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-api.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-settings-page.php';
+require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-update-checker.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-plugin.php';
 
 $stack2_connector_plugin = new Stack2_Plugin();

@@ -4,7 +4,7 @@ Tags: stack2, automation, plugin management, backup, inventory
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 1.0.7
+Stable tag: 1.1.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,7 @@ Features include:
 - HMAC SHA256 signature verification and replay protection
 - Backup initiation and authenticated backup artifact download endpoints
 - Admin settings page with manual sync controls
+- Automatic update checks against GitHub Releases, with checksum-verified installs
 - Debug logging support
 
 == Installation ==
@@ -46,7 +47,14 @@ Check API key, site ID, timestamp skew, and that signature headers are sent exac
 
 Automatic scheduled sync relies on WP-Cron. Manual sync is available from plugin settings.
 
+= How does the plugin update itself? =
+
+Stack2 Connector is not distributed on wordpress.org. It checks GitHub Releases (https://github.com/leighharro/stack2-wp/releases/latest) for new versions and integrates with WordPress's normal plugin update UI, including the built-in "Enable auto-updates" option on the Plugins page. Downloaded packages are verified against the release's published SHA256 checksum before install. Like scheduled sync, checking for updates and background auto-updates rely on WP-Cron; a manual "Check for Updates" button is available from plugin settings.
+
 == Changelog ==
+
+= 1.1.0 =
+- Added self-update support via GitHub Releases, integrated with WordPress's native plugin update UI and auto-updates.
 
 = 1.0.7 =
 - Patch release.
@@ -75,6 +83,9 @@ Automatic scheduled sync relies on WP-Cron. Manual sync is available from plugin
 - Added authenticated backup endpoints and supporting services.
 
 == Upgrade Notice ==
+
+= 1.1.0 =
+Adds self-update support via GitHub Releases.
 
 = 1.0.7 =
 Patch release.
