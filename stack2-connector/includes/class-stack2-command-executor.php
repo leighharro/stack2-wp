@@ -83,12 +83,22 @@ class Stack2_Command_Executor
         require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
         require_once ABSPATH . 'wp-admin/includes/file.php';
         require_once ABSPATH . 'wp-admin/includes/misc.php';
+        require_once ABSPATH . 'wp-admin/includes/plugin.php';
 
+        $was_active = is_plugin_active($resolved);
+
+        // Plugin_Upgrader::upgrade() does not reactivate the plugin afterward; only
+        // bulk_upgrade() hooks active_after_upgrade to restore the pre-update active state.
         $upgrader = new Plugin_Upgrader(new Automatic_Upgrader_Skin());
-        $result = $upgrader->upgrade($resolved);
+        $results = $upgrader->bulk_upgrade(array($resolved));
+        $result = is_array($results) ? ($results[$resolved] ?? null) : $results;
 
-        if (is_wp_error($result) || $result === false) {
+        if (is_wp_error($result) || empty($result)) {
             return array('success' => false, 'error' => 'Plugin update failed. Filesystem credentials may be required.', 'inventory' => null);
+        }
+
+        if ($was_active && !is_plugin_active($resolved)) {
+            activate_plugin($resolved);
         }
 
         return array('success' => true, 'error' => null, 'inventory' => $this->inventory_collector->collect($this->site_id));
