@@ -89,6 +89,8 @@ class Stack2_Database_Dumper
             fwrite($output, 'DROP TABLE IF EXISTS `' . $table . '`;' . "\n");
             fwrite($output, $create[1] . ';' . "\n\n");
 
+            $numeric_columns = $this->numeric_columns_from_create_table($create[1]);
+
             $chunk_size = 1000;
             $offset = 0;
             $batch_size = 100;
@@ -118,8 +120,8 @@ class Stack2_Database_Dumper
                     }
 
                     $values = array();
-                    foreach ($row as $value) {
-                        $values[] = $this->sql_value($value);
+                    foreach ($row as $col_name => $value) {
+                        $values[] = $this->sql_value($value, $numeric_columns[$col_name] ?? false);
                     }
                     $batch_values[] = '(' . implode(',', $values) . ')';
                     $rows_processed++;
@@ -230,6 +232,8 @@ class Stack2_Database_Dumper
         fwrite($output, 'DROP TABLE IF EXISTS `' . $escaped_table . '`;' . "\n");
         fwrite($output, $create[1] . ';' . "\n\n");
 
+        $numeric_columns = $this->numeric_columns_from_create_table($create[1]);
+
         $rows_processed = 0;
         $chunk_size = 1000;
         $offset = 0;
@@ -260,8 +264,8 @@ class Stack2_Database_Dumper
                 }
 
                 $values = array();
-                foreach ($row as $value) {
-                    $values[] = $this->sql_value($value);
+                foreach ($row as $col_name => $value) {
+                    $values[] = $this->sql_value($value, $numeric_columns[$col_name] ?? false);
                 }
                 $batch_values[] = '(' . implode(',', $values) . ')';
                 $rows_processed++;
@@ -365,6 +369,8 @@ class Stack2_Database_Dumper
             $write_compressed($schema, ZLIB_SYNC_FLUSH);
             flush();
 
+            $numeric_columns = $this->numeric_columns_from_create_table($create[1]);
+
             $chunk_size = 1000;
             $batch_size = 100;
             $offset = 0;
@@ -394,8 +400,8 @@ class Stack2_Database_Dumper
                     }
 
                     $values = array();
-                    foreach ($row as $value) {
-                        $values[] = $this->sql_value($value);
+                    foreach ($row as $col_name => $value) {
+                        $values[] = $this->sql_value($value, $numeric_columns[$col_name] ?? false);
                     }
                     $batch_values[] = '(' . implode(',', $values) . ')';
 
@@ -539,7 +545,31 @@ class Stack2_Database_Dumper
         }
     }
 
-    private function sql_value($value): string
+    /**
+     * Maps column name => is-numeric-type, parsed from a SHOW CREATE TABLE
+     * statement. Column definition lines always start with a backtick-quoted
+     * name (index/key/constraint lines start with a keyword instead), so this
+     * is safe without pulling in information_schema.
+     */
+    private function numeric_columns_from_create_table(string $create_sql): array
+    {
+        static $numeric_types = array(
+            'tinyint', 'smallint', 'mediumint', 'int', 'integer', 'bigint',
+            'decimal', 'numeric', 'float', 'double', 'real', 'bit', 'year',
+        );
+
+        $numeric = array();
+        foreach (explode("\n", $create_sql) as $line) {
+            if (preg_match('/^\s*`((?:[^`]|``)+)`\s+([a-zA-Z]+)/', $line, $m)) {
+                $column = str_replace('``', '`', $m[1]);
+                $numeric[$column] = in_array(strtolower($m[2]), $numeric_types, true);
+            }
+        }
+
+        return $numeric;
+    }
+
+    private function sql_value($value, bool $is_numeric_column): string
     {
         if ($value === null) {
             return 'NULL';
@@ -549,7 +579,7 @@ class Stack2_Database_Dumper
             return $value ? '1' : '0';
         }
 
-        if (is_numeric($value)) {
+        if ($is_numeric_column && is_numeric($value)) {
             return (string) $value;
         }
 
