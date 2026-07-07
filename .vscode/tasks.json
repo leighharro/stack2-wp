@@ -8,6 +8,27 @@
       "args": ["compose", "up", "-d", "--force-recreate", "wordpress"],
       "group": "build",
       "problemMatcher": []
+    },
+    {
+      "label": "Release: Bump Plugin Version",
+      "type": "shell",
+      "command": "./scripts/release-bump.sh",
+      "args": ["${input:releaseVersion}"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "releaseVersion",
+      "type": "promptString",
+      "description": "Enter the new plugin version (for example 1.2.3)"
     }
   ]
 }
