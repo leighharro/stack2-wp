@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Stack2 Connector
  * Description: Sync plugin inventory to Stack2 and execute signed remote plugin commands.
- * Version: 1.1.0
+ * Version: 1.1.1
  * Author: Stack2
  * Requires at least: 6.0
 * Requires PHP: 7.4
@@ -14,7 +14,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('STACK2_CONNECTOR_VERSION', '1.1.0');
+define('STACK2_CONNECTOR_VERSION', '1.1.1');
 define('STACK2_CONNECTOR_PATH', plugin_dir_path(__FILE__));
 define('STACK2_CONNECTOR_URL', plugin_dir_url(__FILE__));
 
