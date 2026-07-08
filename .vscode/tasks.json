@@ -2,6 +2,20 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Setup Dev Environment",
+      "type": "shell",
+      "command": "./scripts/setup-dev-environment.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "Refresh Dev Environment",
       "type": "shell",
       "command": "docker",

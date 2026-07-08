@@ -9,6 +9,15 @@ Release documentation:
 - wp-env (quickest path for plugin testing)
 - Docker Compose (portable and explicit services)
 
+## Quick Setup (New Machine)
+
+Run the setup script to install/verify Homebrew, Node.js 20+, PHP 8.3+, Docker,
+and project npm dependencies in one go:
+
+    ./scripts/setup-dev-environment.sh
+
+Or run it from VS Code via Command Palette > Tasks: Run Task > "Setup Dev Environment".
+
 ## Option 1: wp-env
 
 Prerequisites:
