@@ -40,6 +40,12 @@ node_modules/
 .wp-env/
 docker-volumes/
 
+# Per-developer local dev certs (e.g. exported `dotnet dev-certs https`),
+# never shared/committed - each machine's cert is unique.
+docker/certs/*.crt
+docker/certs/*.pem
+docker/certs/*.key
+
 # All plugins
 #
 # Note: If you wish to whitelist plugins,

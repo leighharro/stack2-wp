@@ -52,12 +52,26 @@ class Stack2_Settings_Page
             delete_transient('stack2_admin_notice');
         }
 
+        $permalink_structure = (string) get_option('permalink_structure', '');
+
         ?>
         <div class="wrap">
             <h1>Stack2 Connector</h1>
             <?php if (is_array($notice) && !empty($notice['message'])) : ?>
                 <div class="notice notice-<?php echo esc_attr($notice['type'] ?? 'info'); ?> is-dismissible">
                     <p><?php echo esc_html($notice['message']); ?></p>
+                </div>
+            <?php endif; ?>
+
+            <?php if ($permalink_structure === '') : ?>
+                <div class="notice notice-warning">
+                    <p>
+                        <strong>Permalinks are set to "Plain".</strong>
+                        Stack2's REST endpoints (<code>/wp-json/stack2/v1/...</code>) — used for remote commands,
+                        backups, and WordPress admin SSO — require a non-default permalink structure to work.
+                        Please visit <a href="<?php echo esc_url(admin_url('options-permalink.php')); ?>">Settings &rsaquo; Permalinks</a>
+                        and choose any option other than "Plain", then save.
+                    </p>
                 </div>
             <?php endif; ?>
 

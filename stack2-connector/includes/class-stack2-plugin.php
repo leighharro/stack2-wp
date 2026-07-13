@@ -24,6 +24,7 @@ class Stack2_Plugin
     private Stack2_Http_Client $http_client;
     private Stack2_Backup_Manager $backup_manager;
     private Stack2_Update_Checker $update_checker;
+    private Stack2_SSO_Service $sso_service;
 
     public function __construct()
     {
@@ -32,6 +33,7 @@ class Stack2_Plugin
         $this->inventory_collector = new Stack2_Inventory_Collector();
         $this->http_client = new Stack2_Http_Client($this->signature_service);
         $this->update_checker = new Stack2_Update_Checker($this->logger);
+        $this->sso_service = new Stack2_SSO_Service($this->logger);
 
         $this->backup_manager = new Stack2_Backup_Manager(
             $this->logger,
@@ -45,6 +47,7 @@ class Stack2_Plugin
     public function bootstrap(): void
     {
         add_action('rest_api_init', array($this, 'register_rest_controller'));
+        add_action('init', array($this->sso_service, 'maybe_complete_login'), 1);
         add_action(self::CRON_HOOK_SYNC, array($this, 'handle_scheduled_sync'), 10, 2);
         add_filter('cron_schedules', array($this, 'register_cron_schedule'));
 
@@ -102,6 +105,16 @@ class Stack2_Plugin
         );
 
         $backup_api->register_routes();
+
+        $sso_api = new Stack2_SSO_API(
+            $this->sso_service,
+            new Stack2_Backup_Authentication($this->signature_service),
+            $this->logger,
+            $this->get_site_id(),
+            $this->get_api_key()
+        );
+
+        $sso_api->register_routes();
     }
 
     public function register_cron_schedule(array $schedules): array

@@ -118,6 +118,45 @@ If connection still fails:
 
    docker exec stack2_wp_app sh -lc "curl -i http://host.docker.internal:YOUR_STACK2_PORT"
 
+### If the Stack2 App Is an ASP.NET Core / dotnet App
+
+The dotnet dev server enforces HTTPS redirection by default: a plain HTTP
+request to its API routes comes back as a `307` to `https://host.docker.internal:<HTTPS_PORT>`
+(check `Properties/launchSettings.json` in that project for the HTTPS port,
+e.g. `7010`). `wp_remote_post` follows that redirect, lands on HTTPS, and
+fails with:
+
+    cURL error 60: SSL certificate problem: self-signed certificate
+
+This is because the container doesn't trust the ASP.NET Core local dev
+certificate. Fix it once per machine:
+
+1. Export your trusted dev cert to `docker/certs/` (gitignored, per-developer,
+   never commit it):
+
+       dotnet dev-certs https -ep docker/certs/aspnetcore-dev-cert.crt --format Pem --no-password
+
+2. Recreate the WordPress container so the entrypoint wrapper picks it up
+   and runs `update-ca-certificates`:
+
+       docker compose up -d --force-recreate wordpress
+
+3. Set Stack2 Base URL directly to the HTTPS port (skips the redirect hop,
+   which matters since redirects on POST aren't always followed the same
+   way by every client):
+
+   - https://host.docker.internal:YOUR_STACK2_HTTPS_PORT
+
+4. Verify from inside the container (should return a real HTTP response,
+   no cURL error 60):
+
+       docker exec stack2_wp_app sh -lc "curl -i https://host.docker.internal:YOUR_STACK2_HTTPS_PORT"
+
+If you use wp-env instead of Docker Compose, the same dev-cert-trust
+mismatch applies since it's also just a container reaching your host — the
+underlying wp-env container image differs, so the `update-ca-certificates`
+step and paths will need to be adapted for that image.
+
 ## If wp-json Route Returns 404
 
 In some local Docker setups, Apache rewrite rules are not enabled for pretty REST URLs.

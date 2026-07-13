@@ -31,9 +31,13 @@ services:
       WORDPRESS_DB_PASSWORD: wordpress
       WORDPRESS_DB_NAME: wordpress
       WORDPRESS_DEBUG: 1
+    entrypoint: ["/entrypoint-wrapper.sh"]
+    command: ["apache2-foreground"]
     volumes:
       - ./stack2-connector:/var/www/html/wp-content/plugins/stack2-connector
       - ./docker/apache/allow-override.conf:/etc/apache2/conf-enabled/allow-override.conf:ro
+      - ./docker/entrypoint-wrapper.sh:/entrypoint-wrapper.sh:ro
+      - ./docker/certs:/usr/local/share/ca-certificates/stack2-dev:ro
 
 volumes:
   db_data:

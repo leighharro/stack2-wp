@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Stack2 Connector
  * Description: Sync plugin inventory to Stack2 and execute signed remote plugin commands.
- * Version: 1.1.2
+ * Version: 1.1.3
  * Author: Stack2
  * Requires at least: 6.0
 * Requires PHP: 7.4
@@ -14,7 +14,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('STACK2_CONNECTOR_VERSION', '1.1.2');
+define('STACK2_CONNECTOR_VERSION', '1.1.3');
 define('STACK2_CONNECTOR_PATH', plugin_dir_path(__FILE__));
 define('STACK2_CONNECTOR_URL', plugin_dir_url(__FILE__));
 
@@ -25,6 +25,8 @@ require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-http-client.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-command-executor.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-rest-controller.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-authentication.php';
+require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-sso-service.php';
+require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-sso-api.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-compressor.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-database-dumper.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-manifest.php';
