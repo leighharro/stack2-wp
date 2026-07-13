@@ -42,3 +42,8 @@ $stack2_connector_plugin->bootstrap();
 
 register_activation_hook(__FILE__, array('Stack2_Plugin', 'on_activation'));
 register_deactivation_hook(__FILE__, array('Stack2_Plugin', 'on_deactivation'));
+
+if (defined('WP_CLI') && WP_CLI) {
+    require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-cli-command.php';
+    WP_CLI::add_command('stack2', new Stack2_CLI_Command($stack2_connector_plugin));
+}

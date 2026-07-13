@@ -10,8 +10,13 @@ The workflow at .github/workflows/release-wordpress.yml does the following:
 2. Lints all PHP files.
 3. Builds a WordPress-ready zip package from stack2-connector.
 4. Produces a SHA256 checksum file.
-5. Uploads build artifacts.
-6. Creates a GitHub Release when triggered by a tag push.
+5. Also publishes a stable-named `stack2-connector.zip` alias of the same
+   package (plus its own `.sha256`), so `releases/latest/download/stack2-connector.zip`
+   always resolves to the current release without pinning a version. The
+   in-plugin self-updater ignores this alias and always fetches the
+   version-specific asset.
+6. Uploads build artifacts.
+7. Creates a GitHub Release when triggered by a tag push.
 
 ## Versioning Rules
 
@@ -58,6 +63,8 @@ Tag format can be either vX.Y.Z or X.Y.Z.
 
 - stack2-connector-1.0.1.zip
 - stack2-connector-1.0.1.zip.sha256
+- stack2-connector.zip (stable-named alias of the same package, for `wp plugin install .../releases/latest/download/stack2-connector.zip --activate`)
+- stack2-connector.zip.sha256
 
 ## Manual Build (No Release Publish)
 

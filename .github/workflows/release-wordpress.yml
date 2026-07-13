@@ -22,6 +22,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       zip_name: ${{ steps.version.outputs.zip_name }}
+      latest_zip_name: ${{ steps.version.outputs.latest_zip_name }}
 
     steps:
       - name: Checkout repository
@@ -66,6 +67,7 @@ jobs:
 
           echo "version=$header_version" >> "$GITHUB_OUTPUT"
           echo "zip_name=${PLUGIN_SLUG}-${header_version}.zip" >> "$GITHUB_OUTPUT"
+          echo "latest_zip_name=${PLUGIN_SLUG}.zip" >> "$GITHUB_OUTPUT"
 
       - name: Lint PHP files
         shell: bash
@@ -90,6 +92,11 @@ jobs:
             cd build
             zip -r "${{ steps.version.outputs.zip_name }}" "$PLUGIN_SLUG"
             shasum -a 256 "${{ steps.version.outputs.zip_name }}" > "${{ steps.version.outputs.zip_name }}.sha256"
+
+            # Stable-named copy so installs can target releases/latest/download/<name>.zip
+            # without pinning a version, e.g. `wp plugin install <url> --activate`.
+            cp "${{ steps.version.outputs.zip_name }}" "${{ steps.version.outputs.latest_zip_name }}"
+            shasum -a 256 "${{ steps.version.outputs.latest_zip_name }}" > "${{ steps.version.outputs.latest_zip_name }}.sha256"
           )
 
       - name: Upload build artifacts
@@ -99,6 +106,8 @@ jobs:
           path: |
             build/${{ steps.version.outputs.zip_name }}
             build/${{ steps.version.outputs.zip_name }}.sha256
+            build/${{ steps.version.outputs.latest_zip_name }}
+            build/${{ steps.version.outputs.latest_zip_name }}.sha256
           if-no-files-found: error
 
   release:
@@ -123,3 +132,5 @@ jobs:
           files: |
             build/${{ needs.build.outputs.zip_name }}
             build/${{ needs.build.outputs.zip_name }}.sha256
+            build/${{ needs.build.outputs.latest_zip_name }}
+            build/${{ needs.build.outputs.latest_zip_name }}.sha256
