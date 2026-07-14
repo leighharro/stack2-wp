@@ -56,4 +56,28 @@ class Stack2_CLI_Command
             WP_CLI::success('Stack2 Connector configured.');
         }
     }
+
+    /**
+     * Immediately pushes plugin inventory to Stack2, bypassing the WP-Cron queue.
+     *
+     * ## EXAMPLES
+     *
+     *     wp stack2 sync
+     *
+     * @when after_wp_load
+     */
+    public function sync(array $args, array $assoc_args): void
+    {
+        if (!$this->plugin->has_valid_credentials()) {
+            WP_CLI::error('Stack2 Connector is not configured. Run `wp stack2 configure` first.');
+        }
+
+        $result = $this->plugin->sync_inventory('cli_sync', 0);
+
+        if (!empty($result['success'])) {
+            WP_CLI::success('Inventory sync completed.');
+        } else {
+            WP_CLI::error('Inventory sync failed: ' . (string) ($result['error'] ?? 'Unknown error'));
+        }
+    }
 }

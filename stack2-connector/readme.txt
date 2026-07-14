@@ -46,6 +46,12 @@ You can install, activate, and configure the plugin entirely from WP-CLI:
 
 `wp stack2 configure` saves the Stack2 Base URL, Site ID, and API Key and queues an inventory sync, equivalent to filling out and saving the Settings > Stack2 Connector page.
 
+To push inventory immediately instead of waiting on the queued sync:
+
+    wp stack2 sync
+
+See WP-CLI.md for the full walkthrough, including headless/scripted install notes.
+
 == Frequently Asked Questions ==
 
 = What do I need before setup? =

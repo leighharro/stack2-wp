@@ -51,9 +51,35 @@ wp stack2 configure \
 | `--token` | API key issued by Stack2 for this site. |
 
 All three flags are required. On success, WP-CLI prints a confirmation and
-an inventory sync is queued for a few seconds later (via WP-Cron).
+an inventory sync is queued for a few seconds later — it runs via WP-Cron,
+not immediately in-process.
 
-## 3. Verify
+WordPress's default "pseudo-cron" only fires on an incoming site request,
+so on a headless or low-traffic install (e.g. right after a scripted
+provisioning run with no page views yet) the queued sync may sit pending
+indefinitely. Force it to run immediately with:
+
+```bash
+wp cron event run --due-now
+```
+
+Or skip the queue entirely with the `sync` command below, which pushes
+inventory synchronously and reports the result directly.
+
+## 3. Force a sync on demand
+
+To push inventory to Stack2 immediately, without waiting on WP-Cron:
+
+```bash
+wp stack2 sync
+```
+
+This runs the same inventory push used by the **Sync Now** button and
+scheduled sync, but in-process — it reports success or failure right away
+instead of queuing a cron event. Requires the plugin to already be
+configured (`wp stack2 configure`).
+
+## 4. Verify
 
 ```bash
 wp plugin list --name=stack2-connector
@@ -77,7 +103,8 @@ wp plugin update stack2-connector
 
 ```bash
 wp plugin install https://github.com/leighharro/stack2-wp/releases/latest/download/stack2-connector.zip --activate \
-  && wp stack2 configure --server=https://app.stack2.au --site-id=abc123 --token=secret
+  && wp stack2 configure --server=https://app.stack2.au --site-id=abc123 --token=secret \
+  && wp stack2 sync
 ```
 
 ## Troubleshooting
