@@ -33,6 +33,19 @@ Features include:
 5. Save settings.
 6. Click Sync Now to verify connectivity.
 
+= WP-CLI =
+
+You can install, activate, and configure the plugin entirely from WP-CLI:
+
+    wp plugin install https://github.com/leighharro/stack2-wp/releases/latest/download/stack2-connector.zip --activate
+
+    wp stack2 configure \
+        --server=https://api.stack2.au \
+        --site-id=abc123 \
+        --token=secret
+
+`wp stack2 configure` saves the Stack2 Base URL, Site ID, and API Key and queues an inventory sync, equivalent to filling out and saving the Settings > Stack2 Connector page.
+
 == Frequently Asked Questions ==
 
 = What do I need before setup? =

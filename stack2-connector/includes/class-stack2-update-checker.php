@@ -7,6 +7,7 @@ if (!defined('ABSPATH')) {
 class Stack2_Update_Checker
 {
     public const GITHUB_REPO = 'leighharro/stack2-wp';
+    public const PLUGIN_SLUG = 'stack2-connector';
     public const CACHE_TRANSIENT = 'stack2_connector_update_cache';
     public const CACHE_TTL = 12 * HOUR_IN_SECONDS;
     public const ERROR_CACHE_TTL = 15 * MINUTE_IN_SECONDS;
@@ -194,13 +195,19 @@ class Stack2_Update_Checker
         $package = '';
         $checksum_url = '';
 
+        // The release also publishes a stable-named alias (self::PLUGIN_SLUG . '.zip')
+        // for `wp plugin install .../releases/latest/download/...zip`; ignore it here
+        // and match the version-specific asset so self-update always fetches the
+        // exact tagged release regardless of asset ordering.
+        $expected_name = self::PLUGIN_SLUG . '-' . $version . '.zip';
+
         foreach ((array) ($data['assets'] ?? array()) as $asset) {
             $name = (string) ($asset['name'] ?? '');
             $url = (string) ($asset['browser_download_url'] ?? '');
 
-            if (preg_match('/\.zip$/i', $name) && !preg_match('/\.zip\.sha256$/i', $name)) {
+            if (strcasecmp($name, $expected_name) === 0) {
                 $package = $url;
-            } elseif (preg_match('/\.zip\.sha256$/i', $name)) {
+            } elseif (strcasecmp($name, $expected_name . '.sha256') === 0) {
                 $checksum_url = $url;
             }
         }
