@@ -16,6 +16,47 @@ class Stack2_Settings_Page
         add_action('admin_post_stack2_save_settings', array($this, 'handle_save_settings'));
         add_action('admin_post_stack2_sync_now', array($this, 'handle_sync_now'));
         add_action('admin_post_stack2_check_updates', array($this, 'handle_check_updates'));
+        add_action('admin_init', array($this, 'maybe_redirect_after_activation'));
+        add_action('admin_notices', array($this, 'maybe_render_setup_notice'));
+    }
+
+    public function maybe_redirect_after_activation(): void
+    {
+        if (!get_transient(Stack2_Plugin::ACTIVATION_REDIRECT_TRANSIENT)) {
+            return;
+        }
+
+        delete_transient(Stack2_Plugin::ACTIVATION_REDIRECT_TRANSIENT);
+
+        if (wp_doing_ajax() || (defined('WP_CLI') && WP_CLI) || isset($_GET['activate-multi'])) {
+            return;
+        }
+
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        wp_safe_redirect(admin_url('options-general.php?page=stack2-connector'));
+        exit;
+    }
+
+    public function maybe_render_setup_notice(): void
+    {
+        if (!current_user_can('manage_options') || $this->plugin->has_valid_credentials()) {
+            return;
+        }
+
+        $screen = get_current_screen();
+        if ($screen && $screen->id === 'settings_page_stack2-connector') {
+            return;
+        }
+
+        printf(
+            '<div class="notice notice-warning"><p>%s <a href="%s">%s</a></p></div>',
+            esc_html__('Stack2 Connector is active but not yet configured.', 'stack2-connector'),
+            esc_url(admin_url('options-general.php?page=stack2-connector')),
+            esc_html__('Complete setup now', 'stack2-connector')
+        );
     }
 
     public function register_menu(): void

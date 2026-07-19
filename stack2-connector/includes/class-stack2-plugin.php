@@ -16,6 +16,7 @@ class Stack2_Plugin
     public const OPTION_LAST_SYNC_ERROR = 'stack2_last_sync_error';
 
     public const CRON_HOOK_SYNC = 'stack2_sync_inventory_event';
+    public const ACTIVATION_REDIRECT_TRANSIENT = 'stack2_activation_redirect';
     private const LOCK_TRANSIENT = 'stack2_sync_lock';
 
     private Stack2_Logger $logger;
@@ -69,6 +70,8 @@ class Stack2_Plugin
         $plugin->reschedule_cron();
         if ($plugin->has_valid_credentials()) {
             $plugin->schedule_single_sync(10, 'activation', 0);
+        } else {
+            set_transient(self::ACTIVATION_REDIRECT_TRANSIENT, 1, 30);
         }
     }
 
