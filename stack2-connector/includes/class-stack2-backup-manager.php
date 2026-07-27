@@ -26,7 +26,14 @@ class Stack2_Backup_Manager
         $this->cleaner = $cleaner;
     }
 
-    public function initiate_backup(string $backup_id, bool $include_files, bool $include_database, string $requested_at, string $requested_job_id = ''): array
+    /**
+     * Performs the cheap, bounded-time setup for a backup (id normalization,
+     * temp dir, database metadata query) without walking/hashing any files.
+     * The API layer streams the file manifest separately via
+     * stream_file_manifest() so the HTTP response can flush as each file is
+     * hashed instead of blocking until the whole site has been walked.
+     */
+    public function prepare_backup(string $backup_id, bool $include_files, bool $include_database, string $requested_at, string $requested_job_id = ''): array
     {
         if (!$include_files && !$include_database) {
             throw new InvalidArgumentException('Missing include_files and include_database both false');
@@ -38,10 +45,6 @@ class Stack2_Backup_Manager
         $temp_dir = trailingslashit($this->get_base_backup_dir()) . $job_id;
         wp_mkdir_p($temp_dir);
 
-        $file_estimate = $include_files
-            ? $this->compressor->estimate_wp_content(ABSPATH, true)
-            : array('files_count' => 0, 'bytes_total' => 0, 'files' => array());
-
         $database_info = $include_database
             ? $this->database_dumper->get_database_info()
             : array(
@@ -52,51 +55,31 @@ class Stack2_Backup_Manager
                 'collation' => '',
                 'size_bytes' => 0,
                 'tables_count' => 0,
+                'tables' => array(),
             );
-
-        $manifest = $this->manifest_builder->build_manifest(
-            $backup_id,
-            $job_id,
-            $include_files,
-            $include_database,
-            $database_info,
-            $file_estimate
-        );
-        $manifest['backup_started_at'] = $requested_at !== '' ? $requested_at : gmdate('c');
-
-        $job = array(
-            'job_id' => $job_id,
-            'backup_id' => $backup_id,
-            'status' => 'transfer_pending',
-            'cancel_requested' => false,
-            'include_files' => $include_files,
-            'include_database' => $include_database,
-            'started_at' => gmdate('c'),
-            'updated_at' => gmdate('c'),
-            'completed_at' => null,
-            'temp_directory' => $temp_dir,
-            'manifest' => $manifest,
-            'database_dump_file' => null,
-            'files_archive_file' => null,
-            'files_size_bytes' => 0,
-            'database_size_bytes' => 0,
-            'error' => null,
-            'progress' => array(
-                'phase' => 'transfer_pending',
-                'files_processed' => (int) ($file_estimate['files_count'] ?? 0),
-                'files_total' => (int) ($file_estimate['files_count'] ?? 0),
-                'database_rows_processed' => 0,
-                'database_rows_total' => 0,
-                'bytes_processed' => (int) ($file_estimate['bytes_total'] ?? 0),
-                'bytes_total' => (int) ($file_estimate['bytes_total'] ?? 0),
-                'percent' => 100,
-                'current_file' => null,
-            ),
-        );
 
         $this->logger->info('Backup initiated in stateless mode.', array('backup_id' => $backup_id, 'job_id' => $job_id));
 
-        return $job;
+        return array(
+            'backup_id' => $backup_id,
+            'job_id' => $job_id,
+            'temp_dir' => $temp_dir,
+            'database_info' => $database_info,
+            'backup_started_at' => $requested_at !== '' ? $requested_at : gmdate('c'),
+        );
+    }
+
+    /**
+     * Walks and hashes every file in the WordPress install, invoking $on_file
+     * per file so the caller can stream output as the walk progresses.
+     */
+    public function stream_file_manifest(bool $include_files, callable $on_file): array
+    {
+        if (!$include_files) {
+            return array('files_count' => 0, 'bytes_total' => 0);
+        }
+
+        return $this->compressor->walk_wp_content_with_checksums(ABSPATH, $on_file);
     }
 
     public function get_backup_manifest_file(string $job_id, string $relative_path): ?array

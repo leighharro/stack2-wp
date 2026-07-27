@@ -53,6 +53,49 @@ class Stack2_Backup_Compressor
         return $totals;
     }
 
+    /**
+     * Walks the WordPress install computing a checksum for every file, invoking
+     * $on_file for each one instead of accumulating them in memory. Used by the
+     * initiate endpoint so the HTTP response can be streamed to the client as
+     * each file is hashed, keeping the connection active for the whole walk
+     * instead of blocking until it completes.
+     */
+    public function walk_wp_content_with_checksums(string $wordpress_root_path, callable $on_file): array
+    {
+        $files_count = 0;
+        $bytes_total = 0;
+
+        if (!is_dir($wordpress_root_path)) {
+            return array('files_count' => 0, 'bytes_total' => 0);
+        }
+
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($wordpress_root_path, FilesystemIterator::SKIP_DOTS)
+        );
+
+        foreach ($iterator as $file) {
+            if (!$file->isFile()) {
+                continue;
+            }
+
+            $path = $file->getPathname();
+            if ($this->should_exclude($path)) {
+                continue;
+            }
+
+            $metadata = $this->build_file_metadata($path);
+            if ($metadata === null) {
+                continue;
+            }
+
+            $files_count++;
+            $bytes_total += (int) $file->getSize();
+            $on_file($metadata);
+        }
+
+        return array('files_count' => $files_count, 'bytes_total' => $bytes_total);
+    }
+
     public function compress_wp_content(string $wordpress_root_path, string $temp_dir, callable $progress_callback): array
     {
         if (!class_exists('ZipArchive')) {

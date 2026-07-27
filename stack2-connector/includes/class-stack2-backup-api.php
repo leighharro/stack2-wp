@@ -138,7 +138,7 @@ class Stack2_Backup_API
         ));
     }
 
-    public function initiate_backup(WP_REST_Request $request): WP_REST_Response
+    public function initiate_backup(WP_REST_Request $request)
     {
         if ($this->site_id === '' || $this->api_key === '') {
             return new WP_REST_Response(array(
@@ -165,16 +165,7 @@ class Stack2_Backup_API
         $requested_at = isset($payload['timestamp']) ? sanitize_text_field((string) $payload['timestamp']) : gmdate('c');
 
         try {
-            $job = $this->backup_manager->initiate_backup($backup_id, $include_files, $include_database, $requested_at, $job_id);
-
-            return new WP_REST_Response(array(
-                'success' => true,
-                'error' => null,
-                'backup_id' => $job['backup_id'],
-                'job_id' => $job['job_id'],
-                'status' => 'initiated',
-                'manifest' => $job['manifest'],
-            ), 200);
+            $prepared = $this->backup_manager->prepare_backup($backup_id, $include_files, $include_database, $requested_at, $job_id);
         } catch (InvalidArgumentException $e) {
             return new WP_REST_Response(array(
                 'success' => false,
@@ -204,6 +195,98 @@ class Stack2_Backup_API
                 'status' => 'failed',
             ), 500);
         }
+
+        // From here on we stream the response directly to output instead of
+        // returning a WP_REST_Response, so bytes keep flowing to the proxy
+        // while every file on the site is hashed (the file walk can take a
+        // long time on sites with large media libraries). This mirrors the
+        // database table dump endpoint, which uses the same technique to
+        // avoid proxy connection timeouts. A request that dies mid-stream
+        // leaves truncated JSON; treat that as a failure and retry — the
+        // per-file checksum cache (keyed by mtime) makes the retry cheap.
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(0);
+        }
+
+        @ini_set('zlib.output_compression', '0');
+        @ini_set('output_buffering', '0');
+        while (ob_get_level() > 0) {
+            @ob_end_clean();
+        }
+
+        header('Content-Type: application/json; charset=utf-8');
+        status_header(200);
+
+        try {
+            $this->stream_initiate_response($prepared, $include_files, $include_database);
+        } catch (Throwable $e) {
+            $this->logger->error('Backup manifest streaming failed.', array(
+                'job_id' => $prepared['job_id'] ?? null,
+                'error' => $e->getMessage(),
+            ));
+        }
+
+        exit;
+    }
+
+    private function stream_initiate_response(array $prepared, bool $include_files, bool $include_database): void
+    {
+        $database_info = $prepared['database_info'];
+        $tables = $include_database ? array_values($database_info['tables'] ?? array()) : array();
+        $uploads = wp_upload_dir();
+
+        echo '{"success":true,"error":null,'
+            . '"backup_id":' . wp_json_encode($prepared['backup_id']) . ','
+            . '"job_id":' . wp_json_encode($prepared['job_id']) . ','
+            . '"status":"initiated",'
+            . '"manifest":{'
+            . '"backup_id":' . wp_json_encode($prepared['backup_id']) . ','
+            . '"job_id":' . wp_json_encode($prepared['job_id']) . ','
+            . '"wordpress_version":' . wp_json_encode(get_bloginfo('version')) . ','
+            . '"php_version":' . wp_json_encode(PHP_VERSION) . ','
+            . '"site_url":' . wp_json_encode(get_site_url()) . ','
+            . '"home_url":' . wp_json_encode(home_url('/')) . ','
+            . '"generated_at":' . wp_json_encode(gmdate('c')) . ','
+            . '"backup_started_at":' . wp_json_encode($prepared['backup_started_at']) . ','
+            . '"include_files":' . ($include_files ? 'true' : 'false') . ','
+            . '"include_database":' . ($include_database ? 'true' : 'false') . ','
+            . '"wp_content_path":' . wp_json_encode(WP_CONTENT_DIR) . ','
+            . '"wp_uploads_path":' . wp_json_encode((string) ($uploads['basedir'] ?? '')) . ','
+            . '"database":' . wp_json_encode(array(
+                'host' => (string) ($database_info['host'] ?? ''),
+                'port' => (int) ($database_info['port'] ?? 3306),
+                'name' => (string) ($database_info['name'] ?? ''),
+                'charset' => (string) ($database_info['charset'] ?? ''),
+                'collation' => (string) ($database_info['collation'] ?? ''),
+            )) . ','
+            . '"tables_count":' . (int) ($database_info['tables_count'] ?? 0) . ','
+            . '"estimated_database_size_mb":' . (int) ceil(((int) ($database_info['size_bytes'] ?? 0)) / 1048576) . ','
+            . '"tables":' . wp_json_encode($tables) . ','
+            . '"files":[';
+        flush();
+
+        $files_count = 0;
+        $since_flush = 0;
+
+        $this->backup_manager->stream_file_manifest($include_files, function (array $metadata) use (&$files_count, &$since_flush) {
+            if ($files_count > 0) {
+                echo ',';
+            }
+            echo wp_json_encode($metadata);
+
+            $files_count++;
+            $since_flush++;
+            if ($since_flush >= 25) {
+                flush();
+                $since_flush = 0;
+            }
+        });
+
+        echo '],'
+            . '"estimated_files_count":' . $files_count
+            . '}'
+            . '}';
+        flush();
     }
 
     public function get_status(WP_REST_Request $request): WP_REST_Response
