@@ -30,8 +30,8 @@ Features include:
 2. Activate the plugin through the Plugins menu in WordPress.
 3. Go to Settings > Stack2 Connector.
 4. Enter your Stack2 Base URL, Site ID, and API Key.
-5. Save settings.
-6. Click Sync Now to verify connectivity.
+5. Save settings. Inventory sync runs immediately in that request; the admin notice reports success or failure so you can confirm credentials work.
+6. Use Sync Now later if you want to push inventory again without changing settings.
 
 = WP-CLI =
 
@@ -44,9 +44,9 @@ You can install, activate, and configure the plugin entirely from WP-CLI:
         --site-id=abc123 \
         --token=secret
 
-`wp stack2 configure` saves the Stack2 Base URL, Site ID, and API Key and queues an inventory sync, equivalent to filling out and saving the Settings > Stack2 Connector page.
+`wp stack2 configure` saves the Stack2 Base URL, Site ID, and API Key and queues an inventory sync. Saving the Settings > Stack2 Connector page stores the same values but runs inventory sync immediately in the save request and shows the result as an admin notice.
 
-To push inventory immediately instead of waiting on the queued sync:
+To push inventory immediately from the CLI instead of waiting on the queued sync:
 
     wp stack2 sync
 

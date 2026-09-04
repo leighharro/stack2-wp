@@ -35,9 +35,16 @@ class Stack2_CLI_Command
      */
     public function configure(array $args, array $assoc_args): void
     {
-        $server = isset($assoc_args['server']) ? esc_url_raw(trim((string) $assoc_args['server'])) : '';
-        $site_id = isset($assoc_args['site-id']) ? sanitize_text_field((string) $assoc_args['site-id']) : '';
-        $token = isset($assoc_args['token']) ? sanitize_text_field((string) $assoc_args['token']) : '';
+        $server = isset($assoc_args['server']) ? (string) $assoc_args['server'] : '';
+        $server = Stack2_Plugin::sanitize_credential($server);
+        $server = esc_url_raw($server);
+        $server = Stack2_Plugin::sanitize_credential($server);
+
+        $site_id = isset($assoc_args['site-id']) ? (string) $assoc_args['site-id'] : '';
+        $site_id = sanitize_text_field(Stack2_Plugin::sanitize_credential($site_id));
+
+        $token = isset($assoc_args['token']) ? (string) $assoc_args['token'] : '';
+        $token = sanitize_text_field(Stack2_Plugin::sanitize_credential($token));
 
         if ($server === '' || $site_id === '' || $token === '') {
             WP_CLI::error('--server, --site-id, and --token are all required.');

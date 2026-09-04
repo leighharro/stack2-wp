@@ -194,9 +194,16 @@ class Stack2_Settings_Page
 
         check_admin_referer('stack2_save_settings');
 
-        $base_url = isset($_POST['stack2_base_url']) ? esc_url_raw(trim((string) wp_unslash($_POST['stack2_base_url']))) : '';
-        $site_id = isset($_POST['stack2_site_id']) ? sanitize_text_field((string) wp_unslash($_POST['stack2_site_id'])) : '';
-        $api_key_new = isset($_POST['stack2_api_key_new']) ? sanitize_text_field((string) wp_unslash($_POST['stack2_api_key_new'])) : '';
+        $base_url = isset($_POST['stack2_base_url']) ? (string) wp_unslash($_POST['stack2_base_url']) : '';
+        $base_url = Stack2_Plugin::sanitize_credential($base_url);
+        $base_url = esc_url_raw($base_url);
+        $base_url = Stack2_Plugin::sanitize_credential($base_url);
+
+        $site_id = isset($_POST['stack2_site_id']) ? (string) wp_unslash($_POST['stack2_site_id']) : '';
+        $site_id = sanitize_text_field(Stack2_Plugin::sanitize_credential($site_id));
+
+        $api_key_new = isset($_POST['stack2_api_key_new']) ? (string) wp_unslash($_POST['stack2_api_key_new']) : '';
+        $api_key_new = sanitize_text_field(Stack2_Plugin::sanitize_credential($api_key_new));
         $auto_sync = !empty($_POST['stack2_auto_sync_enabled']) ? 1 : 0;
         $interval = isset($_POST['stack2_sync_interval_minutes']) ? absint($_POST['stack2_sync_interval_minutes']) : 60;
         $debug = !empty($_POST['stack2_debug_enabled']) ? 1 : 0;
@@ -221,13 +228,17 @@ class Stack2_Settings_Page
         $this->plugin->reschedule_cron();
 
         if ($this->plugin->has_valid_credentials()) {
-            $this->plugin->schedule_single_sync(5, 'settings_save', 0);
-            $message = 'Settings saved and sync queued.';
+            $result = $this->plugin->sync_inventory('settings_save', 0);
+            $notice_type = $result['success'] ? 'success' : 'error';
+            $message = $result['success']
+                ? 'Settings saved and inventory sync completed successfully.'
+                : 'Settings saved, but inventory sync failed: ' . ($result['error'] ?? 'Unknown error');
         } else {
+            $notice_type = 'success';
             $message = 'Settings saved. Add valid credentials to enable sync.';
         }
 
-        set_transient('stack2_admin_notice', array('type' => 'success', 'message' => $message), 30);
+        set_transient('stack2_admin_notice', array('type' => $notice_type, 'message' => $message), 30);
         wp_safe_redirect(admin_url('options-general.php?page=stack2-connector'));
         exit;
     }
