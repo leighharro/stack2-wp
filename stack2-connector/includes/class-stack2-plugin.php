@@ -211,6 +211,30 @@ class Stack2_Plugin
         return $this->get_base_url() !== '' && $this->get_site_id() !== '' && $this->get_api_key() !== '';
     }
 
+    /**
+     * Normalize a pasted credential before save.
+     *
+     * Strips NBSP / zero-width / BOM, removes internal newlines and tabs,
+     * then trims leading and trailing ASCII whitespace.
+     */
+    public static function sanitize_credential(string $value): string
+    {
+        $value = str_replace(
+            array(
+                "\xC2\xA0",
+                "\xE2\x80\x8B",
+                "\xE2\x80\x8C",
+                "\xE2\x80\x8D",
+                "\xEF\xBB\xBF",
+            ),
+            '',
+            $value
+        );
+        $value = preg_replace('/[\r\n\t]+/', '', $value) ?? $value;
+
+        return trim($value);
+    }
+
     public function get_backup_manager(): Stack2_Backup_Manager
     {
         return $this->backup_manager;
