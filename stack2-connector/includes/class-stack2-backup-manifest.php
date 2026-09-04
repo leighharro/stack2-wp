@@ -12,12 +12,18 @@ class Stack2_Backup_Manifest
         bool $include_files,
         bool $include_database,
         array $database_info,
-        array $file_info = array()
+        array $file_info = array(),
+        array $options = array()
     ): array {
         $uploads = wp_upload_dir();
-        $manifest_files = $this->sanitize_manifest_files($file_info['files'] ?? array());
         $manifest_tables = $this->sanitize_manifest_tables($database_info['tables'] ?? array());
         $generated_at = gmdate('c');
+        $backup_started_at = isset($options['backup_started_at']) && $options['backup_started_at'] !== ''
+            ? (string) $options['backup_started_at']
+            : $generated_at;
+        $manifest_complete = array_key_exists('manifest_complete', $options)
+            ? (bool) $options['manifest_complete']
+            : !$include_files;
 
         return array(
             'backup_id' => $backup_id,
@@ -27,7 +33,7 @@ class Stack2_Backup_Manifest
             'site_url' => get_site_url(),
             'home_url' => home_url('/'),
             'generated_at' => $generated_at,
-            'backup_started_at' => $generated_at,
+            'backup_started_at' => $backup_started_at,
             'include_files' => $include_files,
             'include_database' => $include_database,
             'wp_content_path' => WP_CONTENT_DIR,
@@ -42,8 +48,10 @@ class Stack2_Backup_Manifest
             'estimated_files_count' => (int) ($file_info['files_count'] ?? 0),
             'estimated_database_size_mb' => (int) ceil(((int) ($database_info['size_bytes'] ?? 0)) / 1048576),
             'tables_count' => (int) ($database_info['tables_count'] ?? 0),
-            'files' => $include_files ? $manifest_files : array(),
+            'files' => array(),
             'tables' => $include_database ? $manifest_tables : array(),
+            'manifest_mode' => (string) ($options['manifest_mode'] ?? 'paged'),
+            'manifest_complete' => $manifest_complete,
         );
     }
 

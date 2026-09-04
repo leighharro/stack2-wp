@@ -16,6 +16,7 @@ class Stack2_Plugin
     public const OPTION_LAST_SYNC_ERROR = 'stack2_last_sync_error';
 
     public const CRON_HOOK_SYNC = 'stack2_sync_inventory_event';
+    public const CRON_HOOK_MANIFEST = 'stack2_build_backup_manifest';
     public const ACTIVATION_REDIRECT_TRANSIENT = 'stack2_activation_redirect';
     private const LOCK_TRANSIENT = 'stack2_sync_lock';
 
@@ -50,6 +51,7 @@ class Stack2_Plugin
         add_action('rest_api_init', array($this, 'register_rest_controller'));
         add_action('init', array($this->sso_service, 'maybe_complete_login'), 1);
         add_action(self::CRON_HOOK_SYNC, array($this, 'handle_scheduled_sync'), 10, 2);
+        add_action(self::CRON_HOOK_MANIFEST, array($this, 'handle_manifest_build'), 10, 1);
         add_filter('cron_schedules', array($this, 'register_cron_schedule'));
 
         $this->update_checker->bootstrap();
@@ -152,6 +154,11 @@ class Stack2_Plugin
     public function handle_scheduled_sync(int $attempt = 0, string $trigger = 'cron'): void
     {
         $this->sync_inventory($trigger, $attempt);
+    }
+
+    public function handle_manifest_build(string $job_id): void
+    {
+        $this->backup_manager->continue_manifest_build($job_id);
     }
 
     public function sync_inventory(string $trigger = 'manual', int $attempt = 0): array

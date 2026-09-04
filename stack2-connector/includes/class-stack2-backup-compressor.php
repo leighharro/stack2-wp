@@ -7,10 +7,14 @@ if (!defined('ABSPATH')) {
 class Stack2_Backup_Compressor
 {
     private Stack2_Logger $logger;
+    private string $wordpress_root;
 
-    public function __construct(Stack2_Logger $logger)
+    public function __construct(Stack2_Logger $logger, ?string $wordpress_root = null)
     {
         $this->logger = $logger;
+        $this->wordpress_root = $wordpress_root !== null && $wordpress_root !== ''
+            ? $wordpress_root
+            : (defined('ABSPATH') ? (string) ABSPATH : '');
     }
 
     public function estimate_wp_content(string $wordpress_root_path, bool $include_manifest_files = false): array
@@ -55,10 +59,7 @@ class Stack2_Backup_Compressor
 
     /**
      * Walks the WordPress install computing a checksum for every file, invoking
-     * $on_file for each one instead of accumulating them in memory. Used by the
-     * initiate endpoint so the HTTP response can be streamed to the client as
-     * each file is hashed, keeping the connection active for the whole walk
-     * instead of blocking until it completes.
+     * $on_file for each one instead of accumulating them in memory.
      */
     public function walk_wp_content_with_checksums(string $wordpress_root_path, callable $on_file): array
     {
@@ -94,6 +95,85 @@ class Stack2_Backup_Compressor
         }
 
         return array('files_count' => $files_count, 'bytes_total' => $bytes_total);
+    }
+
+    /**
+     * Collects relative paths (no hashing) so a later pass can checksum in
+     * bounded chunks. $on_path receives the relative path string.
+     *
+     * Resume is count-based: skip the first $skip_count included files so a
+     * vanished last-path cannot stall the walk.
+     *
+     * @return array{complete: bool, last_path: string, count: int}
+     */
+    public function collect_wp_content_paths(
+        string $wordpress_root_path,
+        callable $on_path,
+        int $skip_count = 0,
+        int $max_items = 0,
+        float $deadline = 0.0
+    ): array {
+        $count = 0;
+        $seen = 0;
+        $last_path = '';
+
+        if (!is_dir($wordpress_root_path)) {
+            return array('complete' => true, 'last_path' => '', 'count' => 0);
+        }
+
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($wordpress_root_path, FilesystemIterator::SKIP_DOTS)
+        );
+
+        foreach ($iterator as $file) {
+            if ($deadline > 0 && microtime(true) >= $deadline) {
+                return array('complete' => false, 'last_path' => $last_path, 'count' => $count);
+            }
+
+            if (!$file->isFile()) {
+                continue;
+            }
+
+            $path = $file->getPathname();
+            if ($this->should_exclude($path)) {
+                continue;
+            }
+
+            $relative = $this->normalize_relative_path($path);
+            if ($relative === '') {
+                continue;
+            }
+
+            $seen++;
+            if ($seen <= $skip_count) {
+                continue;
+            }
+
+            $on_path($relative);
+            $last_path = $relative;
+            $count++;
+
+            if ($max_items > 0 && $count >= $max_items) {
+                return array('complete' => false, 'last_path' => $last_path, 'count' => $count);
+            }
+        }
+
+        return array('complete' => true, 'last_path' => $last_path, 'count' => $count);
+    }
+
+    /**
+     * Hashes one relative path (using the mtime checksum cache) and returns
+     * {path, sha256, size} or null if the file cannot be read.
+     */
+    public function metadata_for_relative_path(string $relative_path): ?array
+    {
+        $relative_path = ltrim(wp_normalize_path($relative_path), '/');
+        if ($relative_path === '' || strpos($relative_path, '../') !== false) {
+            return null;
+        }
+
+        $absolute = trailingslashit($this->wordpress_root) . $relative_path;
+        return $this->build_file_metadata($absolute);
     }
 
     public function compress_wp_content(string $wordpress_root_path, string $temp_dir, callable $progress_callback): array
@@ -251,7 +331,7 @@ class Stack2_Backup_Compressor
     private function normalize_relative_path(string $absolute_path): string
     {
         $normalized = wp_normalize_path($absolute_path);
-        $root = trailingslashit(wp_normalize_path(ABSPATH));
+        $root = trailingslashit(wp_normalize_path($this->wordpress_root !== '' ? $this->wordpress_root : ABSPATH));
 
         if (strpos($normalized, $root) === 0) {
             $relative = substr($normalized, strlen($root));

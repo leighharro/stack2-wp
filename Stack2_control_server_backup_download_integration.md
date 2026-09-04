@@ -12,7 +12,7 @@ It focuses on:
 
 The WordPress plugin backup flow is now stateless.
 
-- `initiate` returns a manifest and a `job_id` token.
+- `initiate` returns a small manifest envelope and a `job_id` token. The file inventory is **not** inline; page it from `GET /backups/{job_id}/manifest`.
 - The control server downloads backup data directly per manifest item:
   - Files: one request per file
   - Database: one request per table
@@ -72,7 +72,7 @@ Empty body hash constant:
 }
 ```
 
-Success response:
+Success response (always small — kilobytes, never the full file list):
 
 ```json
 {
@@ -81,31 +81,77 @@ Success response:
   "backup_id": "...",
   "job_id": "backup_xxxxxxxx_1715425800",
   "status": "initiated",
+  "manifest_mode": "paged",
+  "manifest_complete": false,
+  "manifest_status": "pending",
+  "files_page_size": 1000,
   "manifest": {
     "backup_id": "...",
     "job_id": "...",
+    "wordpress_version": "6.8",
+    "php_version": "8.3.7",
+    "site_url": "https://example.com",
+    "home_url": "https://example.com/",
+    "generated_at": "2026-09-04T12:00:00+00:00",
+    "backup_started_at": "2026-05-11T14:30:00Z",
     "include_files": true,
     "include_database": true,
-    "files": [
-      { "path": "wp-content/uploads/2026/05/photo.jpg", "sha256": "<64-char lowercase hex>", "size": 123456 }
-    ],
+    "wp_content_path": "/var/www/html/wp-content",
+    "wp_uploads_path": "/var/www/html/wp-content/uploads",
+    "database": { "host": "localhost", "port": 3306, "name": "wordpress", "charset": "utf8mb4", "collation": "utf8mb4_unicode_ci" },
+    "tables_count": 2,
+    "estimated_database_size_mb": 1,
+    "estimated_files_count": 0,
     "tables": ["wp_options", "wp_posts"],
-    "...": "other metadata"
+    "files": [],
+    "manifest_mode": "paged",
+    "manifest_complete": false
   }
 }
 ```
 
 Notes:
 
-- `manifest.files` is the canonical list for file downloads. Each entry is an object with `path`, `sha256`, and `size` — **not** just a path string.
-- `manifest.tables` is the canonical list for DB table downloads.
-- `job_id` is used for subsequent download and cleanup endpoints.
+- **`manifest.files` is always omitted-or-empty on initiate.** Do not treat an empty array as "this site has no files" unless `manifest_complete` is true (database-only backups) or paging has finished.
+- `manifest.tables` is still the canonical list for DB table downloads.
+- `job_id` is used for manifest paging, download, and cleanup endpoints.
 - `job_id` in request body is optional. If provided and valid (`[A-Za-z0-9_-]`, max 128 chars), the plugin reuses it instead of generating a new one.
-- `manifest.files[].sha256` is computed by the plugin synchronously during `initiate` (SHA-256 of the file's current on-disk contents, so `initiate` can take noticeably longer on sites with large media libraries — this is expected, not a bug). It is the **content-addressed key the control server uses to deduplicate against blob storage** — see "Content-addressed deduplication" below. It is a separate value from the `X-Backup-Checksum-SHA256` header returned on the actual file download (both are SHA-256 of the same file and should match; the header is a transfer-integrity check, the manifest value is the dedup key).
-- **The response is streamed, not buffered.** The plugin starts writing the JSON response (and flushes periodically) before it has finished hashing every file, so that reverse proxies see continuous bytes and don't apply an idle/connection timeout while a large site is walked — this is the same technique used by the database table download endpoint. Practical implications for the client:
-  - Do not assume a fixed response time budget; do assume bytes may arrive in bursts over a long-lived connection.
-  - **Parse the response as a stream and validate that it is complete, well-formed JSON before trusting it.** If the connection drops or a proxy times out mid-stream, the client receives truncated JSON (e.g. an unterminated `files` array). Treat any parse failure or premature connection close as a failed `initiate` — not a partial success — and retry the whole call.
-  - Retries are cheap: per-file checksums are cached by the plugin (keyed by file mtime), so a second `initiate` call re-walks the filesystem but skips re-hashing any file that hasn't changed since the first attempt.
+- File `sha256` values are **not** computed during `initiate`. They are produced while the paged manifest is built (WP-Cron + `GET .../manifest` requests) using the same mtime-keyed `stack2_cksum_*` cache as before.
+
+### 1b) Page the file manifest
+
+- Method: `GET`
+- Path: `/wp-json/stack2/v1/backups/{job_id}/manifest`
+- Query: `cursor` (opaque, optional) and `limit` (optional, default 1000, hard max 2000)
+- Signed path is the route **without** the query string:
+  `GET:/wp-json/stack2/v1/backups/{job_id}/manifest:{timestamp}:{empty_sha256}`
+- Singular alias: `/wp-json/stack2/v1/backup/{job_id}/manifest`
+
+```json
+{
+  "success": true,
+  "job_id": "backup_xxxxxxxx_1715425800",
+  "backup_id": "...",
+  "manifest_mode": "paged",
+  "manifest_status": "building",
+  "files": [
+    { "path": "wp-content/uploads/2026/05/photo.jpg", "sha256": "<64-char lowercase hex>", "size": 123456 }
+  ],
+  "next_cursor": "<opaque>",
+  "has_more": true,
+  "estimated_files_count": 46000,
+  "manifest_complete": false,
+  "files_page_size": 1000
+}
+```
+
+Client rules:
+
+- `200` with `files[]`: a complete page. Each entry is `{path, sha256, size}` — `sha256` is the content-addressed dedup key (lowercase hex). Follow `next_cursor` while `has_more` is true.
+- `202`: walk is still `building` and the requested page is not ready. Retry the **same** cursor. Do not treat this as an empty site.
+- Last page: `has_more: false`, `next_cursor: null`, `manifest_complete: true`, `estimated_files_count` equals the number of returned entries across all pages.
+- `400` invalid cursor, `401` HMAC, `404` unknown job, `500` corrupt/failed build. Never persist a page unless `success` is true and the HTTP status is `200`.
+- Concatenate pages in order. Do not start file downloads until you have the pages you need (typically wait until `manifest_complete` or until you have processed the current page's hashes).
 
 ### 2) Download one file from manifest
 
@@ -182,11 +228,11 @@ There is no server-side backup progression to poll.
 
 Implement flow as:
 
-1. Call `initiate` once.
-2. Persist returned `manifest` and `job_id` in your own control-server backup record.
+1. Call `initiate` once. Persist `job_id`, `manifest.tables`, and metadata. Ignore `manifest.files` on initiate (it is empty).
+2. Page `GET /backups/{job_id}/manifest` until `manifest_complete` is true (retry `202` / `building`). Persist every `{path, sha256, size}`.
 3. Build a download work queue from:
-   - `manifest.files` (file tasks)
-   - `manifest.tables` (table tasks)
+   - paged manifest `files` (file tasks)
+   - initiate `manifest.tables` (table tasks)
 4. For each file task, check blob storage for an existing object keyed by `sha256` before downloading — see "Content-addressed deduplication" below. Only issue the `GET` download request on a miss.
 5. Download each remaining item using signed `GET` requests.
 6. Verify each downloaded payload using response checksum header (`X-Backup-Checksum-SHA256`), and confirm it matches the `sha256` recorded for that file in `manifest.files`.
@@ -200,7 +246,7 @@ Implement flow as:
 1. Before enqueuing a file download, look up `sha256` in blob storage (a content-addressed store keyed by hash, independent of site/backup/path).
 2. **Hit**: reference/copy the existing blob into this backup's file set (e.g. `files/<manifest-relative-path>` → existing blob by hash). Do not call the file download endpoint. Mark the item `succeeded` immediately.
 3. **Miss**: download via `GET /backups/{job_id}/files/{base64url_relative_path}` as normal, verify `X-Backup-Checksum-SHA256` matches the manifest `sha256`, store the blob keyed by hash, then link it into this backup's file set.
-4. This is why `initiate` computes `sha256` for every file synchronously before responding — the dedup decision has to be made before any download traffic is generated, and the plugin has no separate "list files without hashing" endpoint. Expect `initiate` latency to scale with the number and size of files on the site (mitigated on the plugin side by an mtime-keyed transient cache, so unchanged files are cheap on repeat backups).
+4. `sha256` is produced while paging the manifest, not during `initiate`. Wait until a page (or the full inventory) is `200` before making dedup decisions for those files. Unchanged files stay cheap via the plugin's mtime-keyed transient cache.
 
 Cancellation semantics:
 
@@ -248,7 +294,8 @@ base64url(s):
 - Retry `429` if encountered.
 - Do not retry `400/401/403/404` blindly.
 - On `401`, regenerate timestamp and signature, retry once.
-- `initiate` specifically: because its response is streamed (see notes above), a proxy timeout partway through shows up as a connection reset or unexpected EOF on an already-`200`-status response, not as a clean `5xx`. Treat "200 but body failed to parse as complete JSON" the same as a `5xx` for retry purposes.
+- `initiate` is a small buffered JSON response. Treat truncated/unparseable bodies as failure and retry.
+- Manifest pages: retry `202` (building) and network/`5xx`. Do not accept a page whose JSON does not parse or whose `success` is false.
 
 ### Integrity checks
 
@@ -266,9 +313,10 @@ For each response body:
 ## Error Handling Matrix
 
 - `200`: success
-- `400`: malformed request or invalid encoded file/table input
+- `202`: manifest page not ready yet (`manifest_status` is `building`)
+- `400`: malformed request or invalid encoded file/table/cursor input
 - `401`: auth/signature/timestamp issue
-- `404`: requested file/table unavailable
+- `404`: requested file/table/job unavailable
 - `410`: deprecated endpoint (expected for status/cancel/list/component archive)
 - `503`: plugin credentials not configured in WP settings
 
@@ -284,9 +332,11 @@ If your control server currently:
 replace with:
 
 1. `initiate`
-2. consume manifest
+2. page `GET .../manifest` until complete
 3. per-item downloads (`files/...`, `database/table/...`)
 4. cleanup
+
+**Deploy order:** ship Platform/control-server support for paged manifests (while still accepting legacy inline `manifest.files` from older plugins) **before** rolling out this plugin. Installing the plugin first will make old Platform treat every site as having zero files.
 
 Suggested internal status model in control server:
 
@@ -321,6 +371,22 @@ curl -sS "https://$HOST$PATH" \
   -H "x-stack2-timestamp: $TS" \
   -H "x-stack2-signature: $SIG" \
   --data "$BODY"
+```
+
+### Page the file manifest
+
+```bash
+JOB_ID="backup_xxxxxxxx_1715425800"
+PATH="/wp-json/stack2/v1/backups/$JOB_ID/manifest"
+TS="$(date +%s)"
+EMPTY_HASH="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+MSG="GET:$PATH:$TS:$EMPTY_HASH"
+SIG="$(printf "%s" "$MSG" | openssl dgst -sha256 -hmac "$API_KEY" -binary | xxd -p -c 256)"
+
+curl -sS "https://$HOST$PATH?limit=1000" \
+  -H "x-stack2-site-id: $SITE_ID" \
+  -H "x-stack2-timestamp: $TS" \
+  -H "x-stack2-signature: $SIG"
 ```
 
 ### Download one manifest file
@@ -366,7 +432,8 @@ Use the below as a seed prompt for code generation agents:
 Requirements:
 
 - Call POST /wp-json/stack2/v1/backups/initiate with signed HMAC headers.
-- Parse and persist manifest.files (objects with path/sha256/size), manifest.tables, and job_id.
+- Persist job_id and manifest.tables from initiate. Do not expect manifest.files to be populated.
+- Page GET /wp-json/stack2/v1/backups/{job_id}/manifest (signed path without query string) until manifest_complete, retrying HTTP 202. Persist files[] objects with path/sha256/size.
 - Before downloading each file, look up its sha256 in content-addressed blob storage; on a hit, link the existing blob into this backup instead of downloading.
 - Download files from GET /backups/{job_id}/files/{base64url_relative_path} only on a dedup miss.
 - Download database tables from GET /backups/{job_id}/database/table/{base64url_table_name}.

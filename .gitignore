@@ -39,6 +39,9 @@ wp-config.php
 node_modules/
 .wp-env/
 docker-volumes/
+vendor/
+composer.lock
+tests/.phpunit.cache/
 
 # Per-developer local dev certs (e.g. exported `dotnet dev-certs https`),
 # never shared/committed - each machine's cert is unique.
