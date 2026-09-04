@@ -30,6 +30,7 @@ require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-sso-api.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-compressor.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-database-dumper.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-manifest.php';
+require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-manifest-store.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-cleaner.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-manager.php';
 require_once STACK2_CONNECTOR_PATH . 'includes/class-stack2-backup-api.php';

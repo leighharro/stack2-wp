@@ -6,7 +6,8 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
 
 - Inventory sync to Stack2 endpoint: `POST /api/websites/plugin-inventory`
 - Signed command endpoint: `POST /wp-json/stack2/v1/command`
-- Backup initiation endpoint: `POST /wp-json/stack2/v1/backups/initiate`
+- Backup initiation endpoint: `POST /wp-json/stack2/v1/backups/initiate` (small paged-manifest envelope; no inline file list)
+- Backup file manifest pages: `GET /wp-json/stack2/v1/backups/{job_id}/manifest?cursor=&limit=`
 - Backup status endpoint: deprecated in stateless mode
 - Backup database table download endpoint: `GET /wp-json/stack2/v1/backups/{job_id}/database/table/{base64url_table_name}`
 - Backup file download endpoint: `GET /wp-json/stack2/v1/backups/{job_id}/files/{base64url_relative_path}`
@@ -94,6 +95,18 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
 
 If `job_id` is provided and matches `[A-Za-z0-9_-]` (max 128 chars), the plugin reuses it. Otherwise it generates a new value like `backup_<id>_<unix>`.
 
+The initiate response is a small JSON envelope. `manifest.files` is always an empty array. File inventory is paged:
+
+`GET /wp-json/stack2/v1/backups/{job_id}/manifest?cursor=&limit=`
+
+- HMAC-signed like other GET backup routes. Query string is **not** part of the signed path.
+- Default `limit` is 1000; hard max is 2000.
+- Each `files[]` entry is `{path, sha256, size}` (`sha256` is lowercase hex).
+- `manifest_mode` is always `"paged"`. Poll while `manifest_status` is `pending`/`building` (`202` means the requested page is not ready yet). When the walk finishes, the last page has `has_more: false`, `next_cursor: null`, and `manifest_complete: true`.
+- Singular aliases (`/backup/...`) remain registered.
+
+**Deploy order:** ship a Platform/control-server build that understands paged manifests (and still accepts legacy inline `manifest.files`) **before** this plugin version. Old Platform that only reads `manifest.files` from initiate will see an empty file list.
+
 ## Backup Status Values
 
 Stateful status transitions are deprecated in stateless mode.
@@ -108,7 +121,7 @@ File downloads are streamed directly from `wp-content` using:
 
 - `GET /wp-json/stack2/v1/backups/{job_id}/files/{base64url_relative_path}`
 
-The manifest returned during initiate is used by the control server as the canonical file/table list.
+Job scratch files live under `wp-content/.stack2-backup/{job_id}/` (`job.json`, `paths.ndjson`, `files.ndjson`). The control server must page `GET .../manifest` for the canonical file list; `manifest.tables` from initiate remains the canonical table list.
 
 ## Command Payload
 

@@ -6,32 +6,46 @@ if (!defined('ABSPATH')) {
 
 class Stack2_Backup_Manager
 {
+    public const CRON_HOOK_MANIFEST = 'stack2_build_backup_manifest';
+
     private Stack2_Logger $logger;
     private Stack2_Backup_Compressor $compressor;
     private Stack2_Database_Dumper $database_dumper;
     private Stack2_Backup_Manifest $manifest_builder;
     private Stack2_Backup_Cleaner $cleaner;
+    private string $wordpress_root;
+    private string $backup_base_dir;
+    private array $manifest_limits;
 
     public function __construct(
         Stack2_Logger $logger,
         Stack2_Backup_Compressor $compressor,
         Stack2_Database_Dumper $database_dumper,
         Stack2_Backup_Manifest $manifest_builder,
-        Stack2_Backup_Cleaner $cleaner
+        Stack2_Backup_Cleaner $cleaner,
+        ?string $wordpress_root = null,
+        ?string $backup_base_dir = null,
+        array $manifest_limits = array()
     ) {
         $this->logger = $logger;
         $this->compressor = $compressor;
         $this->database_dumper = $database_dumper;
         $this->manifest_builder = $manifest_builder;
         $this->cleaner = $cleaner;
+        $this->wordpress_root = $wordpress_root !== null && $wordpress_root !== ''
+            ? $wordpress_root
+            : (defined('ABSPATH') ? (string) ABSPATH : '');
+        $this->backup_base_dir = $backup_base_dir !== null && $backup_base_dir !== ''
+            ? $backup_base_dir
+            : '';
+        $this->manifest_limits = $manifest_limits;
     }
 
     /**
      * Performs the cheap, bounded-time setup for a backup (id normalization,
      * temp dir, database metadata query) without walking/hashing any files.
-     * The API layer streams the file manifest separately via
-     * stream_file_manifest() so the HTTP response can flush as each file is
-     * hashed instead of blocking until the whole site has been walked.
+     * The file inventory is built incrementally on disk and served via
+     * GET /backups/{job_id}/manifest pages.
      */
     public function prepare_backup(string $backup_id, bool $include_files, bool $include_database, string $requested_at, string $requested_job_id = ''): array
     {
@@ -58,6 +72,14 @@ class Stack2_Backup_Manager
                 'tables' => array(),
             );
 
+        $backup_started_at = $requested_at !== '' ? $requested_at : gmdate('c');
+        $store = $this->get_manifest_store($job_id);
+        $store->initialize($backup_id, $job_id, $include_files, $include_database, $backup_started_at);
+
+        if ($include_files) {
+            $this->schedule_manifest_build($job_id);
+        }
+
         $this->logger->info('Backup initiated in stateless mode.', array('backup_id' => $backup_id, 'job_id' => $job_id));
 
         return array(
@@ -65,13 +87,77 @@ class Stack2_Backup_Manager
             'job_id' => $job_id,
             'temp_dir' => $temp_dir,
             'database_info' => $database_info,
-            'backup_started_at' => $requested_at !== '' ? $requested_at : gmdate('c'),
+            'backup_started_at' => $backup_started_at,
+            'include_files' => $include_files,
+            'include_database' => $include_database,
+            'manifest_complete' => !$include_files,
+            'manifest_status' => $include_files
+                ? Stack2_Backup_Manifest_Store::STATUS_PENDING
+                : Stack2_Backup_Manifest_Store::STATUS_READY,
+            'files_page_size' => Stack2_Backup_Manifest_Store::DEFAULT_PAGE_SIZE,
+        );
+    }
+
+    public function build_initiate_manifest(array $prepared): array
+    {
+        $include_files = !empty($prepared['include_files']);
+        $include_database = !empty($prepared['include_database']);
+
+        return $this->manifest_builder->build_manifest(
+            (string) $prepared['backup_id'],
+            (string) $prepared['job_id'],
+            $include_files,
+            $include_database,
+            is_array($prepared['database_info'] ?? null) ? $prepared['database_info'] : array(),
+            array(
+                'files' => array(),
+                'files_count' => 0,
+            ),
+            array(
+                'backup_started_at' => (string) ($prepared['backup_started_at'] ?? ''),
+                'manifest_mode' => 'paged',
+                'manifest_complete' => !$include_files,
+            )
         );
     }
 
     /**
+     * @return array{payload: array, http_status: int}
+     */
+    public function get_manifest_page(string $job_id, ?string $cursor, $limit): array
+    {
+        $store = $this->require_manifest_store($job_id);
+        $page = $store->get_page($cursor, Stack2_Backup_Manifest_Store::normalize_limit($limit), true);
+
+        if ($store->needs_more_work()) {
+            $this->schedule_manifest_build($job_id);
+        }
+
+        return $page;
+    }
+
+    public function continue_manifest_build(string $job_id): void
+    {
+        try {
+            $store = $this->require_manifest_store($job_id);
+        } catch (RuntimeException $e) {
+            $this->logger->info('Skipping manifest build for unknown job.', array(
+                'job_id' => $job_id,
+                'error' => $e->getMessage(),
+            ));
+            return;
+        }
+
+        $store->build_chunk();
+
+        if ($store->needs_more_work()) {
+            $this->schedule_manifest_build($job_id);
+        }
+    }
+
+    /**
      * Walks and hashes every file in the WordPress install, invoking $on_file
-     * per file so the caller can stream output as the walk progresses.
+     * per file. Kept for callers that still need a full in-process walk.
      */
     public function stream_file_manifest(bool $include_files, callable $on_file): array
     {
@@ -79,7 +165,7 @@ class Stack2_Backup_Manager
             return array('files_count' => 0, 'bytes_total' => 0);
         }
 
-        return $this->compressor->walk_wp_content_with_checksums(ABSPATH, $on_file);
+        return $this->compressor->walk_wp_content_with_checksums($this->wordpress_root, $on_file);
     }
 
     public function get_backup_manifest_file(string $job_id, string $relative_path): ?array
@@ -89,9 +175,9 @@ class Stack2_Backup_Manager
             return null;
         }
 
-        $absolute_path = trailingslashit(ABSPATH) . $relative_path;
+        $absolute_path = trailingslashit($this->wordpress_root) . $relative_path;
         $normalized_absolute = wp_normalize_path($absolute_path);
-        $normalized_root = trailingslashit(wp_normalize_path(ABSPATH));
+        $normalized_root = trailingslashit(wp_normalize_path($this->wordpress_root));
 
         if (strpos($normalized_absolute, $normalized_root) !== 0) {
             return null;
@@ -118,9 +204,9 @@ class Stack2_Backup_Manager
             return null;
         }
 
-        $absolute_path = trailingslashit(ABSPATH) . $relative_path;
+        $absolute_path = trailingslashit($this->wordpress_root) . $relative_path;
         $normalized_absolute = wp_normalize_path($absolute_path);
-        $normalized_root = trailingslashit(wp_normalize_path(ABSPATH));
+        $normalized_root = trailingslashit(wp_normalize_path($this->wordpress_root));
 
         if (strpos($normalized_absolute, $normalized_root) !== 0) {
             return null;
@@ -249,6 +335,48 @@ class Stack2_Backup_Manager
     {
     }
 
+    private function require_manifest_store(string $job_id): Stack2_Backup_Manifest_Store
+    {
+        $job_id = trim($job_id);
+        if ($job_id === '' || !preg_match('/^[A-Za-z0-9_-]{1,128}$/', $job_id)) {
+            throw new RuntimeException('Backup job not found.');
+        }
+
+        $store = $this->get_manifest_store($job_id);
+        if (!$store->job_exists()) {
+            throw new RuntimeException('Backup job not found.');
+        }
+
+        return $store;
+    }
+
+    private function get_manifest_store(string $job_id): Stack2_Backup_Manifest_Store
+    {
+        $temp_dir = trailingslashit($this->get_base_backup_dir()) . $job_id;
+
+        return new Stack2_Backup_Manifest_Store(
+            $this->compressor,
+            $this->logger,
+            $temp_dir,
+            $this->wordpress_root,
+            $this->manifest_limits
+        );
+    }
+
+    private function schedule_manifest_build(string $job_id): void
+    {
+        if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_single_event')) {
+            return;
+        }
+
+        $args = array($job_id);
+        if (wp_next_scheduled(self::CRON_HOOK_MANIFEST, $args)) {
+            return;
+        }
+
+        wp_schedule_single_event(time() + 1, self::CRON_HOOK_MANIFEST, $args);
+    }
+
     private function normalize_backup_id(string $backup_id): string
     {
         $trimmed = trim($backup_id);
@@ -288,6 +416,10 @@ class Stack2_Backup_Manager
 
     private function get_base_backup_dir(): string
     {
+        if ($this->backup_base_dir !== '') {
+            return $this->backup_base_dir;
+        }
+
         return trailingslashit(WP_CONTENT_DIR) . '.stack2-backup';
     }
 
