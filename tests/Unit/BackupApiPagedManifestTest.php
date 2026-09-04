@@ -137,6 +137,11 @@ class BackupApiPagedManifestTest extends BackupTestCase
 
             $response = $api->get_manifest($request);
             if ($response->get_status() === 202) {
+                $payload = $response->get_data();
+                $this->assertNull($payload['next_cursor']);
+                $this->assertTrue($payload['has_more']);
+                $this->assertFalse($payload['manifest_complete']);
+                $this->assertSame(array(), $payload['files']);
                 continue;
             }
 

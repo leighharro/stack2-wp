@@ -108,6 +108,14 @@ class BackupManifestStoreTest extends BackupTestCase
         $this->assertSame(array(), $page['payload']['files']);
         $this->assertFalse($page['payload']['manifest_complete']);
         $this->assertTrue($page['payload']['has_more']);
+        $this->assertNull($page['payload']['next_cursor']);
+        $this->assertContains(
+            $page['payload']['manifest_status'],
+            array(
+                Stack2_Backup_Manifest_Store::STATUS_BUILDING,
+                Stack2_Backup_Manifest_Store::STATUS_PENDING,
+            )
+        );
     }
 
     public function test_corrupt_complete_line_is_not_success(): void
@@ -167,12 +175,12 @@ class BackupManifestStoreTest extends BackupTestCase
         $store->initialize('backup-building', 'job_building', true, false, gmdate('c'));
 
         $first = $store->get_page('', 10, true);
-        $this->assertContains($first['http_status'], array(200, 202));
-        if ((int) $first['http_status'] === 202) {
-            $this->assertSame(array(), $first['payload']['files']);
-            $this->assertSame(Stack2_Backup_Manifest_Store::STATUS_BUILDING, $first['payload']['manifest_status']);
-            $this->assertFalse($first['payload']['manifest_complete']);
-        }
+        $this->assertSame(202, $first['http_status']);
+        $this->assertSame(array(), $first['payload']['files']);
+        $this->assertSame(Stack2_Backup_Manifest_Store::STATUS_BUILDING, $first['payload']['manifest_status']);
+        $this->assertFalse($first['payload']['manifest_complete']);
+        $this->assertTrue($first['payload']['has_more']);
+        $this->assertNull($first['payload']['next_cursor']);
     }
 
     public function test_synthetic_large_tree_pages_completely(): void

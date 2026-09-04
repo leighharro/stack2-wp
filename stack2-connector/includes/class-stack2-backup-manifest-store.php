@@ -136,6 +136,10 @@ class Stack2_Backup_Manifest_Store
      * records are not on disk yet. Never returns a short page as success
      * while the walk is still running.
      *
+     * HTTP 202 means the requested page is not ready: files stay empty,
+     * next_cursor is null, and has_more is true. Clients must retry the
+     * same request cursor/query — they must not advance via next_cursor.
+     *
      * @return array{payload: array, http_status: int}
      */
     public function get_page(?string $cursor, int $limit, bool $build_if_needed = true): array
@@ -434,8 +438,13 @@ class Stack2_Backup_Manifest_Store
         $entries = $this->read_file_entries($start_index, $limit + 1);
 
         if (!$complete && count($entries) <= $limit) {
+            // Still building and this page is short. Keep 202 with an empty
+            // files list. Do not echo the request cursor as next_cursor —
+            // Platform treats a repeated cursor as a loop. Clients retry the
+            // same request cursor; has_more + manifest_complete:false signal
+            // that more work remains.
             return array(
-                'payload' => $this->success_payload($job, $state, array(), $this->encode_cursor($start_index), true, $limit, false),
+                'payload' => $this->success_payload($job, $state, array(), null, true, $limit, false),
                 'http_status' => 202,
             );
         }
