@@ -102,7 +102,7 @@ The initiate response is a small JSON envelope. `manifest.files` is always an em
 - HMAC-signed like other GET backup routes. Query string is **not** part of the signed path.
 - Default `limit` is 1000; hard max is 2000.
 - Each `files[]` entry is `{path, sha256, size}` (`sha256` is lowercase hex).
-- `manifest_mode` is always `"paged"`. Poll while `manifest_status` is `pending`/`building` (`202` means the requested page is not ready yet). When the walk finishes, the last page has `has_more: false`, `next_cursor: null`, and `manifest_complete: true`.
+- `manifest_mode` is always `"paged"`. Poll while `manifest_status` is `pending`/`building`. HTTP `202` means the requested page is not ready: `files` is empty, `next_cursor` is `null`, `has_more` is `true`, and `manifest_complete` is `false`. Retry the **same** request cursor/query — do not treat `next_cursor` as a pagination advance. When the walk finishes, the last page has `has_more: false`, `next_cursor: null`, and `manifest_complete: true`.
 - Singular aliases (`/backup/...`) remain registered.
 
 **Deploy order:** ship a Platform/control-server build that understands paged manifests (and still accepts legacy inline `manifest.files`) **before** this plugin version. Old Platform that only reads `manifest.files` from initiate will see an empty file list.

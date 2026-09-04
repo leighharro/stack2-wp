@@ -148,7 +148,7 @@ Notes:
 Client rules:
 
 - `200` with `files[]`: a complete page. Each entry is `{path, sha256, size}` — `sha256` is the content-addressed dedup key (lowercase hex). Follow `next_cursor` while `has_more` is true.
-- `202`: walk is still `building` and the requested page is not ready. Retry the **same** cursor. Do not treat this as an empty site.
+- `202`: walk is still `pending`/`building` and the requested page is not ready. `files` is empty, `next_cursor` is `null`, `has_more` is `true`, and `manifest_complete` is `false`. Retry the **same** request cursor/query; do not advance via `next_cursor` (it is intentionally null so clients do not see a repeated cursor). Do not treat this as an empty site.
 - Last page: `has_more: false`, `next_cursor: null`, `manifest_complete: true`, `estimated_files_count` equals the number of returned entries across all pages.
 - `400` invalid cursor, `401` HMAC, `404` unknown job, `500` corrupt/failed build. Never persist a page unless `success` is true and the HTTP status is `200`.
 - Concatenate pages in order. Do not start file downloads until you have the pages you need (typically wait until `manifest_complete` or until you have processed the current page's hashes).
@@ -229,7 +229,7 @@ There is no server-side backup progression to poll.
 Implement flow as:
 
 1. Call `initiate` once. Persist `job_id`, `manifest.tables`, and metadata. Ignore `manifest.files` on initiate (it is empty).
-2. Page `GET /backups/{job_id}/manifest` until `manifest_complete` is true (retry `202` / `building`). Persist every `{path, sha256, size}`.
+2. Page `GET /backups/{job_id}/manifest` until `manifest_complete` is true (retry `202` / `building` with the **same** request cursor; `next_cursor` is null on 202). Persist every `{path, sha256, size}`.
 3. Build a download work queue from:
    - paged manifest `files` (file tasks)
    - initiate `manifest.tables` (table tasks)
@@ -295,7 +295,7 @@ base64url(s):
 - Do not retry `400/401/403/404` blindly.
 - On `401`, regenerate timestamp and signature, retry once.
 - `initiate` is a small buffered JSON response. Treat truncated/unparseable bodies as failure and retry.
-- Manifest pages: retry `202` (building) and network/`5xx`. Do not accept a page whose JSON does not parse or whose `success` is false.
+- Manifest pages: retry `202` (building) with the same request cursor (`next_cursor` is null) and network/`5xx`. Do not accept a page whose JSON does not parse or whose `success` is false.
 
 ### Integrity checks
 
@@ -313,7 +313,7 @@ For each response body:
 ## Error Handling Matrix
 
 - `200`: success
-- `202`: manifest page not ready yet (`manifest_status` is `building`)
+- `202`: manifest page not ready yet (`manifest_status` is `pending`/`building`; `next_cursor` is null — retry the same request cursor)
 - `400`: malformed request or invalid encoded file/table/cursor input
 - `401`: auth/signature/timestamp issue
 - `404`: requested file/table/job unavailable
@@ -433,7 +433,7 @@ Requirements:
 
 - Call POST /wp-json/stack2/v1/backups/initiate with signed HMAC headers.
 - Persist job_id and manifest.tables from initiate. Do not expect manifest.files to be populated.
-- Page GET /wp-json/stack2/v1/backups/{job_id}/manifest (signed path without query string) until manifest_complete, retrying HTTP 202. Persist files[] objects with path/sha256/size.
+- Page GET /wp-json/stack2/v1/backups/{job_id}/manifest (signed path without query string) until manifest_complete, retrying HTTP 202 with the same request cursor (`next_cursor` is null on 202). Persist files[] objects with path/sha256/size.
 - Before downloading each file, look up its sha256 in content-addressed blob storage; on a hit, link the existing blob into this backup instead of downloading.
 - Download files from GET /backups/{job_id}/files/{base64url_relative_path} only on a dedup miss.
 - Download database tables from GET /backups/{job_id}/database/table/{base64url_table_name}.

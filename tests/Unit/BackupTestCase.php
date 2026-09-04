@@ -118,6 +118,10 @@ abstract class BackupTestCase extends TestCase
         for ($i = 0; $i < 1000; $i++) {
             $page = $store->get_page($cursor, $limit, true);
             if ((int) $page['http_status'] === 202) {
+                $this->assertNull($page['payload']['next_cursor']);
+                $this->assertTrue($page['payload']['has_more']);
+                $this->assertFalse($page['payload']['manifest_complete']);
+                $this->assertSame(array(), $page['payload']['files']);
                 continue;
             }
 
