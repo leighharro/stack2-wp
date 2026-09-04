@@ -36,6 +36,10 @@ if (!defined('DB_COLLATE')) {
     define('DB_COLLATE', 'utf8mb4_unicode_ci');
 }
 
+if (!defined('ARRAY_A')) {
+    define('ARRAY_A', 'ARRAY_A');
+}
+
 $GLOBALS['stack2_transients'] = array();
 $GLOBALS['stack2_options'] = array();
 $GLOBALS['stack2_cron'] = array();
