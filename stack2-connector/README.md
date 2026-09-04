@@ -33,8 +33,8 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
    - Stack2 Base URL
    - Site ID
    - API Key
-5. Save settings.
-6. Click **Sync Now** to verify connectivity.
+5. Save settings. Inventory sync runs immediately in that request; the admin notice reports success or failure so you can confirm credentials work.
+6. Use **Sync Now** later if you want to push inventory again without changing settings.
 
 ## Settings Stored in `wp_options`
 

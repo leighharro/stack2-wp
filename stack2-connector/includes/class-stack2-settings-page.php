@@ -221,13 +221,17 @@ class Stack2_Settings_Page
         $this->plugin->reschedule_cron();
 
         if ($this->plugin->has_valid_credentials()) {
-            $this->plugin->schedule_single_sync(5, 'settings_save', 0);
-            $message = 'Settings saved and sync queued.';
+            $result = $this->plugin->sync_inventory('settings_save', 0);
+            $notice_type = $result['success'] ? 'success' : 'error';
+            $message = $result['success']
+                ? 'Settings saved and inventory sync completed successfully.'
+                : 'Settings saved, but inventory sync failed: ' . ($result['error'] ?? 'Unknown error');
         } else {
+            $notice_type = 'success';
             $message = 'Settings saved. Add valid credentials to enable sync.';
         }
 
-        set_transient('stack2_admin_notice', array('type' => 'success', 'message' => $message), 30);
+        set_transient('stack2_admin_notice', array('type' => $notice_type, 'message' => $message), 30);
         wp_safe_redirect(admin_url('options-general.php?page=stack2-connector'));
         exit;
     }

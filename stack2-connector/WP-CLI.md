@@ -34,8 +34,9 @@ wp plugin install https://github.com/leighharro/stack2-wp/releases/download/v1.1
 
 Once activated, the plugin registers a `wp stack2 configure` command that
 saves your Stack2 Base URL, Site ID, and API Key, and queues an inventory
-sync — equivalent to filling out and saving the **Settings > Stack2
-Connector** page in wp-admin.
+sync. Saving the **Settings > Stack2 Connector** page stores the same
+values but runs inventory sync immediately in that request (the admin
+notice reports success or failure).
 
 ```bash
 wp stack2 configure \

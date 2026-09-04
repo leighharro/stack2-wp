@@ -92,9 +92,9 @@ Notes:
 1. Activate Stack2 Connector in wp-admin.
 2. Open Settings > Stack2 Connector.
 3. Enter Stack2 Base URL, Site ID, and API key.
-4. Click Save Settings.
-5. Click Sync Now.
-6. Confirm last sync status and debug logs.
+4. Click Save Settings. Inventory sync runs immediately in that request.
+5. Confirm the admin notice reports success or failure, then check last sync status and debug logs.
+6. Optionally click Sync Now to push inventory again without changing settings.
 
 ## Connecting to a Stack2 App Running on Your Mac
 
