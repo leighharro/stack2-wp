@@ -73,7 +73,7 @@ Stack2 Connector is not distributed on wordpress.org. It checks GitHub Releases 
 == Changelog ==
 
 = 1.1.12 =
-- Exclude PHP/host `error_log` files from backup inventory (scan, stats, and hash).
+- Exclude PHP/host log files from backup inventory: `error_log`, `php_errorlog`, `debug.log`, and `*.log` (scan, stats, and hash).
 
 = 1.1.11 =
 - Platform-driven agent backup inventory: `GET .../files/scan` and `POST .../files/stats` replace paged manifests.
