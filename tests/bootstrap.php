@@ -10,7 +10,7 @@ require_once $plugin_includes . '/class-stack2-backup-authentication.php';
 require_once $plugin_includes . '/class-stack2-backup-compressor.php';
 require_once $plugin_includes . '/class-stack2-database-dumper.php';
 require_once $plugin_includes . '/class-stack2-backup-manifest.php';
-require_once $plugin_includes . '/class-stack2-backup-manifest-store.php';
+require_once $plugin_includes . '/class-stack2-backup-file-scanner.php';
 require_once $plugin_includes . '/class-stack2-backup-cleaner.php';
 require_once $plugin_includes . '/class-stack2-backup-manager.php';
 require_once $plugin_includes . '/class-stack2-backup-api.php';
