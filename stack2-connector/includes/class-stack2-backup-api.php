@@ -41,41 +41,10 @@ class Stack2_Backup_API
             'permission_callback' => '__return_true',
         ));
 
-        register_rest_route('stack2/v1', '/backups/(?P<job_id>[A-Za-z0-9_-]+)/manifest', array(
-            'methods' => WP_REST_Server::READABLE,
-            'callback' => array($this, 'get_manifest'),
-            'permission_callback' => '__return_true',
-            'args' => array(
-                'cursor' => array(
-                    'type' => 'string',
-                    'required' => false,
-                    'default' => '',
-                ),
-                'limit' => array(
-                    'type' => 'integer',
-                    'required' => false,
-                    'default' => Stack2_Backup_Manifest_Store::DEFAULT_PAGE_SIZE,
-                ),
-            ),
-        ));
-
-        register_rest_route('stack2/v1', '/backup/(?P<job_id>[A-Za-z0-9_-]+)/manifest', array(
-            'methods' => WP_REST_Server::READABLE,
-            'callback' => array($this, 'get_manifest'),
-            'permission_callback' => '__return_true',
-            'args' => array(
-                'cursor' => array(
-                    'type' => 'string',
-                    'required' => false,
-                    'default' => '',
-                ),
-                'limit' => array(
-                    'type' => 'integer',
-                    'required' => false,
-                    'default' => Stack2_Backup_Manifest_Store::DEFAULT_PAGE_SIZE,
-                ),
-            ),
-        ));
+        $this->register_scan_route('/backups/(?P<job_id>[A-Za-z0-9_-]+)/files/scan');
+        $this->register_scan_route('/backup/(?P<job_id>[A-Za-z0-9_-]+)/files/scan');
+        $this->register_stats_route('/backups/(?P<job_id>[A-Za-z0-9_-]+)/files/stats');
+        $this->register_stats_route('/backup/(?P<job_id>[A-Za-z0-9_-]+)/files/stats');
 
         register_rest_route('stack2/v1', '/backups/(?P<job_id>[A-Za-z0-9_-]+)/status', array(
             'methods' => WP_REST_Server::READABLE,
@@ -107,7 +76,7 @@ class Stack2_Backup_API
             'permission_callback' => '__return_true',
         ));
 
-        register_rest_route('stack2/v1', '/backups/(?P<job_id>[A-Za-z0-9_-]+)/files/(?P<encoded_path>[A-Za-z0-9_-]+)', array(
+        register_rest_route('stack2/v1', '/backups/(?P<job_id>[A-Za-z0-9_-]+)/files/(?P<encoded_path>(?!scan$|stats$)[A-Za-z0-9_-]+)', array(
             'methods' => WP_REST_Server::READABLE,
             'callback' => array($this, 'download_manifest_file'),
             'permission_callback' => '__return_true',
@@ -131,7 +100,7 @@ class Stack2_Backup_API
             'permission_callback' => '__return_true',
         ));
 
-        register_rest_route('stack2/v1', '/backup/(?P<job_id>[A-Za-z0-9_-]+)/files/(?P<encoded_path>[A-Za-z0-9_-]+)', array(
+        register_rest_route('stack2/v1', '/backup/(?P<job_id>[A-Za-z0-9_-]+)/files/(?P<encoded_path>(?!scan$|stats$)[A-Za-z0-9_-]+)', array(
             'methods' => WP_REST_Server::READABLE,
             'callback' => array($this, 'download_manifest_file'),
             'permission_callback' => '__return_true',
@@ -233,21 +202,24 @@ class Stack2_Backup_API
             ), 500);
         }
 
+        $limits = is_array($prepared['inventory_limits'] ?? null)
+            ? $prepared['inventory_limits']
+            : Stack2_Backup_File_Scanner::inventory_limits();
+
         return new WP_REST_Response(array(
             'success' => true,
             'error' => null,
             'backup_id' => $prepared['backup_id'],
             'job_id' => $prepared['job_id'],
             'status' => 'initiated',
-            'manifest_mode' => 'paged',
-            'manifest_complete' => !empty($prepared['manifest_complete']),
-            'manifest_status' => (string) ($prepared['manifest_status'] ?? Stack2_Backup_Manifest_Store::STATUS_PENDING),
-            'files_page_size' => (int) ($prepared['files_page_size'] ?? Stack2_Backup_Manifest_Store::DEFAULT_PAGE_SIZE),
+            'manifest_mode' => 'agent',
+            'scan' => $limits['scan'],
+            'stats' => $limits['stats'],
             'manifest' => $manifest,
         ), 200);
     }
 
-    public function get_manifest(WP_REST_Request $request): WP_REST_Response
+    public function scan_files(WP_REST_Request $request): WP_REST_Response
     {
         if ($this->site_id === '' || $this->api_key === '') {
             return new WP_REST_Response(array(
@@ -263,15 +235,23 @@ class Stack2_Backup_API
         }
 
         $job_id = sanitize_text_field((string) $request->get_param('job_id'));
-        $cursor = (string) $request->get_param('cursor');
-        $limit = (int) $request->get_param('limit');
+        $cursor = (string) ($request->get_param('cursor') ?? '');
+        $limit = (int) ($request->get_param('limit') ?? Stack2_Backup_File_Scanner::DEFAULT_SCAN_LIMIT);
+        $include_sha256 = $this->request_bool($request->get_param('include_sha256'), false);
+        $include_dirs = $this->request_bool($request->get_param('include_dirs'), false);
 
         if (function_exists('set_time_limit')) {
             @set_time_limit(30);
         }
 
         try {
-            $page = $this->backup_manager->get_manifest_page($job_id, $cursor, $limit);
+            $page = $this->backup_manager->scan_files($job_id, $cursor, $limit, $include_sha256, $include_dirs);
+        } catch (InvalidArgumentException $e) {
+            return new WP_REST_Response(array(
+                'success' => false,
+                'error' => $e->getMessage(),
+                'job_id' => $job_id,
+            ), 400);
         } catch (RuntimeException $e) {
             $not_found = $e->getMessage() === 'Backup job not found.';
             return new WP_REST_Response(array(
@@ -280,7 +260,7 @@ class Stack2_Backup_API
                 'job_id' => $job_id,
             ), $not_found ? 404 : 500);
         } catch (Throwable $e) {
-            $this->logger->error('Backup manifest page failed.', array(
+            $this->logger->error('Backup file scan failed.', array(
                 'job_id' => $job_id,
                 'error' => $e->getMessage(),
             ));
@@ -292,7 +272,93 @@ class Stack2_Backup_API
             ), 500);
         }
 
-        return new WP_REST_Response($page['payload'], (int) $page['http_status']);
+        return new WP_REST_Response(array(
+            'success' => true,
+            'job_id' => $job_id,
+            'entries' => $page['entries'],
+            'next_cursor' => $page['next_cursor'],
+            'has_more' => $page['has_more'],
+            'scanned' => $page['scanned'],
+        ), 200);
+    }
+
+    public function stat_files(WP_REST_Request $request): WP_REST_Response
+    {
+        if ($this->site_id === '' || $this->api_key === '') {
+            return new WP_REST_Response(array(
+                'success' => false,
+                'error' => 'Stack2 credentials are not configured.',
+            ), 503);
+        }
+
+        $raw_body = $request->get_body();
+        $auth = $this->verify($request, 'POST', $this->get_signed_path($request), $raw_body);
+        if (is_wp_error($auth)) {
+            return $this->error_response_from_wp_error($auth);
+        }
+
+        $job_id = sanitize_text_field((string) $request->get_param('job_id'));
+        $payload = json_decode($raw_body, true);
+        if (!is_array($payload)) {
+            return new WP_REST_Response(array(
+                'success' => false,
+                'error' => 'Invalid JSON payload.',
+                'job_id' => $job_id,
+            ), 400);
+        }
+
+        if (!isset($payload['paths']) || !is_array($payload['paths'])) {
+            return new WP_REST_Response(array(
+                'success' => false,
+                'error' => 'paths must be an array.',
+                'job_id' => $job_id,
+            ), 400);
+        }
+
+        if (count($payload['paths']) > Stack2_Backup_File_Scanner::MAX_STATS_BATCH) {
+            return new WP_REST_Response(array(
+                'success' => false,
+                'error' => 'Too many paths. Maximum is ' . Stack2_Backup_File_Scanner::MAX_STATS_BATCH . '.',
+                'job_id' => $job_id,
+            ), 400);
+        }
+
+        $include_sha256 = $this->request_bool($payload['include_sha256'] ?? true, true);
+
+        try {
+            $result = $this->backup_manager->stat_files($job_id, $payload['paths'], $include_sha256);
+        } catch (InvalidArgumentException $e) {
+            return new WP_REST_Response(array(
+                'success' => false,
+                'error' => $e->getMessage(),
+                'job_id' => $job_id,
+            ), 400);
+        } catch (RuntimeException $e) {
+            $not_found = $e->getMessage() === 'Backup job not found.';
+            return new WP_REST_Response(array(
+                'success' => false,
+                'error' => $e->getMessage(),
+                'job_id' => $job_id,
+            ), $not_found ? 404 : 500);
+        } catch (Throwable $e) {
+            $this->logger->error('Backup file stats failed.', array(
+                'job_id' => $job_id,
+                'error' => $e->getMessage(),
+            ));
+
+            return new WP_REST_Response(array(
+                'success' => false,
+                'error' => 'Server error',
+                'job_id' => $job_id,
+            ), 500);
+        }
+
+        return new WP_REST_Response(array(
+            'success' => true,
+            'stats' => $result['stats'],
+            'missing' => $result['missing'],
+            'failed' => $result['failed'],
+        ), 200);
     }
 
     public function get_status(WP_REST_Request $request): WP_REST_Response
@@ -509,6 +575,72 @@ class Stack2_Backup_API
             'success' => false,
             'error' => 'Backup listing endpoint is deprecated in stateless mode.',
         ), 410);
+    }
+
+    private function register_scan_route(string $route): void
+    {
+        register_rest_route('stack2/v1', $route, array(
+            'methods' => WP_REST_Server::READABLE,
+            'callback' => array($this, 'scan_files'),
+            'permission_callback' => '__return_true',
+            'args' => array(
+                'cursor' => array(
+                    'type' => 'string',
+                    'required' => false,
+                    'default' => '',
+                ),
+                'limit' => array(
+                    'type' => 'integer',
+                    'required' => false,
+                    'default' => Stack2_Backup_File_Scanner::DEFAULT_SCAN_LIMIT,
+                ),
+                'include_sha256' => array(
+                    'type' => 'boolean',
+                    'required' => false,
+                    'default' => false,
+                ),
+                'include_dirs' => array(
+                    'type' => 'boolean',
+                    'required' => false,
+                    'default' => false,
+                ),
+            ),
+        ));
+    }
+
+    private function register_stats_route(string $route): void
+    {
+        register_rest_route('stack2/v1', $route, array(
+            'methods' => WP_REST_Server::CREATABLE,
+            'callback' => array($this, 'stat_files'),
+            'permission_callback' => '__return_true',
+        ));
+    }
+
+    private function request_bool($value, bool $default): bool
+    {
+        if ($value === null || $value === '') {
+            return $default;
+        }
+
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return (int) $value === 1;
+        }
+
+        $normalized = strtolower(trim((string) $value));
+        if (in_array($normalized, array('1', 'true', 'yes', 'on'), true)) {
+            return true;
+        }
+
+        if (in_array($normalized, array('0', 'false', 'no', 'off'), true)) {
+            return false;
+        }
+
+        return $default;
     }
 
     private function verify(WP_REST_Request $request, string $method, string $path, string $raw_body)

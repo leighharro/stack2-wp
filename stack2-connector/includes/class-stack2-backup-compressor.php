@@ -98,70 +98,6 @@ class Stack2_Backup_Compressor
     }
 
     /**
-     * Collects relative paths (no hashing) so a later pass can checksum in
-     * bounded chunks. $on_path receives the relative path string.
-     *
-     * Resume is count-based: skip the first $skip_count included files so a
-     * vanished last-path cannot stall the walk.
-     *
-     * @return array{complete: bool, last_path: string, count: int}
-     */
-    public function collect_wp_content_paths(
-        string $wordpress_root_path,
-        callable $on_path,
-        int $skip_count = 0,
-        int $max_items = 0,
-        float $deadline = 0.0
-    ): array {
-        $count = 0;
-        $seen = 0;
-        $last_path = '';
-
-        if (!is_dir($wordpress_root_path)) {
-            return array('complete' => true, 'last_path' => '', 'count' => 0);
-        }
-
-        $iterator = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator($wordpress_root_path, FilesystemIterator::SKIP_DOTS)
-        );
-
-        foreach ($iterator as $file) {
-            if ($deadline > 0 && microtime(true) >= $deadline) {
-                return array('complete' => false, 'last_path' => $last_path, 'count' => $count);
-            }
-
-            if (!$file->isFile()) {
-                continue;
-            }
-
-            $path = $file->getPathname();
-            if ($this->should_exclude($path)) {
-                continue;
-            }
-
-            $relative = $this->normalize_relative_path($path);
-            if ($relative === '') {
-                continue;
-            }
-
-            $seen++;
-            if ($seen <= $skip_count) {
-                continue;
-            }
-
-            $on_path($relative);
-            $last_path = $relative;
-            $count++;
-
-            if ($max_items > 0 && $count >= $max_items) {
-                return array('complete' => false, 'last_path' => $last_path, 'count' => $count);
-            }
-        }
-
-        return array('complete' => true, 'last_path' => $last_path, 'count' => $count);
-    }
-
-    /**
      * Hashes one relative path (using the mtime checksum cache) and returns
      * {path, sha256, size} or null if the file cannot be read.
      */
@@ -174,6 +110,27 @@ class Stack2_Backup_Compressor
 
         $absolute = trailingslashit($this->wordpress_root) . $relative_path;
         return $this->build_file_metadata($absolute);
+    }
+
+    public function is_excluded(string $path, bool $is_directory = false): bool
+    {
+        $normalized = wp_normalize_path($path);
+        if ($is_directory) {
+            $normalized = trailingslashit($normalized);
+        }
+
+        foreach (self::EXCLUSION_PATTERNS as $pattern) {
+            if (strpos($normalized, $pattern) !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public function checksum_for_path(string $absolute_path): string
+    {
+        return $this->get_cached_file_checksum($absolute_path);
     }
 
     public function compress_wp_content(string $wordpress_root_path, string $temp_dir, callable $progress_callback): array
@@ -268,15 +225,7 @@ class Stack2_Backup_Compressor
 
     private function should_exclude(string $path): bool
     {
-        $normalized = wp_normalize_path($path);
-
-        foreach (self::EXCLUSION_PATTERNS as $pattern) {
-            if (strpos($normalized, $pattern) !== false) {
-                return true;
-            }
-        }
-
-        return false;
+        return $this->is_excluded($path, is_dir($path));
     }
 
     private function build_file_metadata(string $absolute_path): ?array

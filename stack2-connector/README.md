@@ -6,8 +6,9 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
 
 - Inventory sync to Stack2 endpoint: `POST /api/websites/plugin-inventory`
 - Signed command endpoint: `POST /wp-json/stack2/v1/command`
-- Backup initiation endpoint: `POST /wp-json/stack2/v1/backups/initiate` (small paged-manifest envelope; no inline file list)
-- Backup file manifest pages: `GET /wp-json/stack2/v1/backups/{job_id}/manifest?cursor=&limit=`
+- Backup initiation endpoint: `POST /wp-json/stack2/v1/backups/initiate` (small agent-mode envelope; no inline file list)
+- Backup file scan: `GET /wp-json/stack2/v1/backups/{job_id}/files/scan?cursor=&limit=`
+- Backup file stats: `POST /wp-json/stack2/v1/backups/{job_id}/files/stats`
 - Backup status endpoint: deprecated in stateless mode
 - Backup database table download endpoint: `GET /wp-json/stack2/v1/backups/{job_id}/database/table/{base64url_table_name}`
 - Backup file download endpoint: `GET /wp-json/stack2/v1/backups/{job_id}/files/{base64url_relative_path}`
@@ -95,17 +96,26 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
 
 If `job_id` is provided and matches `[A-Za-z0-9_-]` (max 128 chars), the plugin reuses it. Otherwise it generates a new value like `backup_<id>_<unix>`.
 
-The initiate response is a small JSON envelope. `manifest.files` is always an empty array. File inventory is paged:
+The initiate response is a small JSON envelope. `manifest.files` is always an empty array. `manifest_mode` is `"agent"`. File inventory is Platform-driven:
 
-`GET /wp-json/stack2/v1/backups/{job_id}/manifest?cursor=&limit=`
+`GET /wp-json/stack2/v1/backups/{job_id}/files/scan?cursor=&limit=&include_sha256=0&include_dirs=0`
 
 - HMAC-signed like other GET backup routes. Query string is **not** part of the signed path.
-- Default `limit` is 1000; hard max is 2000.
-- Each `files[]` entry is `{path, sha256, size}` (`sha256` is lowercase hex).
-- `manifest_mode` is always `"paged"`. Poll while `manifest_status` is `pending`/`building`. HTTP `202` means the requested page is not ready: `files` is empty, `next_cursor` is `null`, `has_more` is `true`, and `manifest_complete` is `false`. Retry the **same** request cursor/query — do not treat `next_cursor` as a pagination advance. When the walk finishes, the last page has `has_more: false`, `next_cursor: null`, and `manifest_complete: true`.
-- Singular aliases (`/backup/...`) remain registered.
+- Default `limit` is 500; hard max is 2000. Successful pages always return HTTP `200` (never `202`).
+- Each `entries[]` item is `{path, size, mtime}` plus optional `sha256` when `include_sha256=true`.
+- `cursor` is an opaque base64url JSON DFS stack. Omit/empty starts at ABSPATH. Resume with `next_cursor` while `has_more` is true.
+- Prefer leaving `include_sha256` false and hashing via stats batches.
 
-**Deploy order:** ship a Platform/control-server build that understands paged manifests (and still accepts legacy inline `manifest.files`) **before** this plugin version. Old Platform that only reads `manifest.files` from initiate will see an empty file list.
+`POST /wp-json/stack2/v1/backups/{job_id}/files/stats`
+
+- HMAC-signed POST. Body: `{ "paths": ["..."], "include_sha256": true }`.
+- Maximum 200 paths per request. Over that limit returns HTTP `400`.
+- Response: `{ success, stats: [{path, size, mtime, sha256?}], missing: [], failed: [{path, error}] }`.
+- Uses the mtime-keyed `stack2_cksum_*` checksum cache.
+
+Initiate advertises the same limits as `scan.default_limit` / `scan.max_limit` and `stats.default_batch` / `stats.max_batch`. Singular aliases (`/backup/...`) remain registered.
+
+The previous paged `GET .../manifest` build (WP-Cron, NDJSON ledger, HTTP 202) has been removed.
 
 ## Backup Status Values
 
@@ -121,7 +131,7 @@ File downloads are streamed directly from `wp-content` using:
 
 - `GET /wp-json/stack2/v1/backups/{job_id}/files/{base64url_relative_path}`
 
-Job scratch files live under `wp-content/.stack2-backup/{job_id}/` (`job.json`, `paths.ndjson`, `files.ndjson`). The control server must page `GET .../manifest` for the canonical file list; `manifest.tables` from initiate remains the canonical table list.
+Job scratch files live under `wp-content/.stack2-backup/{job_id}/` (download temp/cache only). File inventory is not stored on disk; Platform walks it with scan/stats. `manifest.tables` from initiate remains the canonical table list.
 
 ## Command Payload
 

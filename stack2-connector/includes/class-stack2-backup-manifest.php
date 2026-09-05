@@ -50,7 +50,7 @@ class Stack2_Backup_Manifest
             'tables_count' => (int) ($database_info['tables_count'] ?? 0),
             'files' => array(),
             'tables' => $include_database ? $manifest_tables : array(),
-            'manifest_mode' => (string) ($options['manifest_mode'] ?? 'paged'),
+            'manifest_mode' => (string) ($options['manifest_mode'] ?? 'agent'),
             'manifest_complete' => $manifest_complete,
         );
     }

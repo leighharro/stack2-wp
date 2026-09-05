@@ -6,16 +6,14 @@ if (!defined('ABSPATH')) {
 
 class Stack2_Backup_Manager
 {
-    public const CRON_HOOK_MANIFEST = 'stack2_build_backup_manifest';
-
     private Stack2_Logger $logger;
     private Stack2_Backup_Compressor $compressor;
     private Stack2_Database_Dumper $database_dumper;
     private Stack2_Backup_Manifest $manifest_builder;
     private Stack2_Backup_Cleaner $cleaner;
+    private Stack2_Backup_File_Scanner $file_scanner;
     private string $wordpress_root;
     private string $backup_base_dir;
-    private array $manifest_limits;
 
     public function __construct(
         Stack2_Logger $logger,
@@ -25,7 +23,7 @@ class Stack2_Backup_Manager
         Stack2_Backup_Cleaner $cleaner,
         ?string $wordpress_root = null,
         ?string $backup_base_dir = null,
-        array $manifest_limits = array()
+        ?Stack2_Backup_File_Scanner $file_scanner = null
     ) {
         $this->logger = $logger;
         $this->compressor = $compressor;
@@ -38,14 +36,17 @@ class Stack2_Backup_Manager
         $this->backup_base_dir = $backup_base_dir !== null && $backup_base_dir !== ''
             ? $backup_base_dir
             : '';
-        $this->manifest_limits = $manifest_limits;
+        $this->file_scanner = $file_scanner ?? new Stack2_Backup_File_Scanner(
+            $this->compressor,
+            $this->wordpress_root
+        );
     }
 
     /**
      * Performs the cheap, bounded-time setup for a backup (id normalization,
      * temp dir, database metadata query) without walking/hashing any files.
-     * The file inventory is built incrementally on disk and served via
-     * GET /backups/{job_id}/manifest pages.
+     * File inventory is driven by Platform via GET .../files/scan and
+     * POST .../files/stats.
      */
     public function prepare_backup(string $backup_id, bool $include_files, bool $include_database, string $requested_at, string $requested_job_id = ''): array
     {
@@ -73,14 +74,8 @@ class Stack2_Backup_Manager
             );
 
         $backup_started_at = $requested_at !== '' ? $requested_at : gmdate('c');
-        $store = $this->get_manifest_store($job_id);
-        $store->initialize($backup_id, $job_id, $include_files, $include_database, $backup_started_at);
 
-        if ($include_files) {
-            $this->schedule_manifest_build($job_id);
-        }
-
-        $this->logger->info('Backup initiated in stateless mode.', array('backup_id' => $backup_id, 'job_id' => $job_id));
+        $this->logger->info('Backup initiated in agent inventory mode.', array('backup_id' => $backup_id, 'job_id' => $job_id));
 
         return array(
             'backup_id' => $backup_id,
@@ -90,11 +85,8 @@ class Stack2_Backup_Manager
             'backup_started_at' => $backup_started_at,
             'include_files' => $include_files,
             'include_database' => $include_database,
-            'manifest_complete' => !$include_files,
-            'manifest_status' => $include_files
-                ? Stack2_Backup_Manifest_Store::STATUS_PENDING
-                : Stack2_Backup_Manifest_Store::STATUS_READY,
-            'files_page_size' => Stack2_Backup_Manifest_Store::DEFAULT_PAGE_SIZE,
+            'manifest_mode' => 'agent',
+            'inventory_limits' => Stack2_Backup_File_Scanner::inventory_limits(),
         );
     }
 
@@ -115,44 +107,31 @@ class Stack2_Backup_Manager
             ),
             array(
                 'backup_started_at' => (string) ($prepared['backup_started_at'] ?? ''),
-                'manifest_mode' => 'paged',
-                'manifest_complete' => !$include_files,
+                'manifest_mode' => 'agent',
+                'manifest_complete' => true,
             )
         );
     }
 
     /**
-     * @return array{payload: array, http_status: int}
+     * @return array{entries: array<int, array>, next_cursor: ?string, has_more: bool, scanned: int}
      */
-    public function get_manifest_page(string $job_id, ?string $cursor, $limit): array
+    public function scan_files(string $job_id, ?string $cursor, $limit, bool $include_sha256 = false, bool $include_dirs = false): array
     {
-        $store = $this->require_manifest_store($job_id);
-        $page = $store->get_page($cursor, Stack2_Backup_Manifest_Store::normalize_limit($limit), true);
+        $this->require_job($job_id);
 
-        if ($store->needs_more_work()) {
-            $this->schedule_manifest_build($job_id);
-        }
-
-        return $page;
+        return $this->file_scanner->scan($cursor, $limit, $include_sha256, $include_dirs);
     }
 
-    public function continue_manifest_build(string $job_id): void
+    /**
+     * @param array<int, mixed> $paths
+     * @return array{stats: array<int, array>, missing: array<int, string>, failed: array<int, array{path: string, error: string}>}
+     */
+    public function stat_files(string $job_id, array $paths, bool $include_sha256 = true): array
     {
-        try {
-            $store = $this->require_manifest_store($job_id);
-        } catch (RuntimeException $e) {
-            $this->logger->info('Skipping manifest build for unknown job.', array(
-                'job_id' => $job_id,
-                'error' => $e->getMessage(),
-            ));
-            return;
-        }
+        $this->require_job($job_id);
 
-        $store->build_chunk();
-
-        if ($store->needs_more_work()) {
-            $this->schedule_manifest_build($job_id);
-        }
+        return $this->file_scanner->stats($paths, $include_sha256);
     }
 
     /**
@@ -335,46 +314,19 @@ class Stack2_Backup_Manager
     {
     }
 
-    private function require_manifest_store(string $job_id): Stack2_Backup_Manifest_Store
+    private function require_job(string $job_id): string
     {
         $job_id = trim($job_id);
         if ($job_id === '' || !preg_match('/^[A-Za-z0-9_-]{1,128}$/', $job_id)) {
             throw new RuntimeException('Backup job not found.');
         }
 
-        $store = $this->get_manifest_store($job_id);
-        if (!$store->job_exists()) {
+        $temp_dir = trailingslashit($this->get_base_backup_dir()) . $job_id;
+        if (!is_dir($temp_dir)) {
             throw new RuntimeException('Backup job not found.');
         }
 
-        return $store;
-    }
-
-    private function get_manifest_store(string $job_id): Stack2_Backup_Manifest_Store
-    {
-        $temp_dir = trailingslashit($this->get_base_backup_dir()) . $job_id;
-
-        return new Stack2_Backup_Manifest_Store(
-            $this->compressor,
-            $this->logger,
-            $temp_dir,
-            $this->wordpress_root,
-            $this->manifest_limits
-        );
-    }
-
-    private function schedule_manifest_build(string $job_id): void
-    {
-        if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_single_event')) {
-            return;
-        }
-
-        $args = array($job_id);
-        if (wp_next_scheduled(self::CRON_HOOK_MANIFEST, $args)) {
-            return;
-        }
-
-        wp_schedule_single_event(time() + 1, self::CRON_HOOK_MANIFEST, $args);
+        return $job_id;
     }
 
     private function normalize_backup_id(string $backup_id): string

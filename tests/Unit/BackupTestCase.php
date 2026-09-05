@@ -10,7 +10,7 @@ abstract class BackupTestCase extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->wp_root = sys_get_temp_dir() . '/stack2-paged-' . uniqid('', true);
+        $this->wp_root = sys_get_temp_dir() . '/stack2-agent-' . uniqid('', true);
         $this->backup_dir = $this->wp_root . '/wp-content/.stack2-backup';
         wp_mkdir_p($this->wp_root . '/wp-content/uploads');
         wp_mkdir_p($this->backup_dir);
@@ -49,40 +49,24 @@ abstract class BackupTestCase extends TestCase
         return new Stack2_Backup_Compressor($this->logger(), $this->wp_root);
     }
 
-    protected function store(string $job_id, array $limits = array()): Stack2_Backup_Manifest_Store
+    protected function scanner(float $time_budget = 30.0): Stack2_Backup_File_Scanner
     {
-        $defaults = array(
-            'chunk_file_limit' => 10000,
-            'chunk_seconds' => 30,
-            'index_file_limit' => 10000,
-        );
-
-        return new Stack2_Backup_Manifest_Store(
-            $this->compressor(),
-            $this->logger(),
-            trailingslashit($this->backup_dir) . $job_id,
-            $this->wp_root,
-            array_merge($defaults, $limits)
-        );
+        return new Stack2_Backup_File_Scanner($this->compressor(), $this->wp_root, $time_budget);
     }
 
-    protected function manager(array $limits = array()): Stack2_Backup_Manager
+    protected function manager(): Stack2_Backup_Manager
     {
-        $defaults = array(
-            'chunk_file_limit' => 10000,
-            'chunk_seconds' => 30,
-            'index_file_limit' => 10000,
-        );
+        $compressor = $this->compressor();
 
         return new Stack2_Backup_Manager(
             $this->logger(),
-            $this->compressor(),
+            $compressor,
             new Stack2_Database_Dumper($this->logger()),
             new Stack2_Backup_Manifest(),
             new Stack2_Backup_Cleaner(),
             $this->wp_root,
             $this->backup_dir,
-            array_merge($defaults, $limits)
+            new Stack2_Backup_File_Scanner($compressor, $this->wp_root)
         );
     }
 
@@ -110,56 +94,85 @@ abstract class BackupTestCase extends TestCase
         $request->set_route($path);
     }
 
-    protected function collect_all_pages(Stack2_Backup_Manifest_Store $store, int $limit = 50): array
+    /**
+     * @return array<int, array>
+     */
+    protected function collect_all_scan_pages(Stack2_Backup_File_Scanner $scanner, int $limit = 50, bool $include_sha256 = false, bool $include_dirs = false): array
     {
-        $files = array();
-        $cursor = null;
+        $entries = array();
+        $cursor = '';
 
         for ($i = 0; $i < 1000; $i++) {
-            $page = $store->get_page($cursor, $limit, true);
-            if ((int) $page['http_status'] === 202) {
-                $this->assertNull($page['payload']['next_cursor']);
-                $this->assertTrue($page['payload']['has_more']);
-                $this->assertFalse($page['payload']['manifest_complete']);
-                $this->assertSame(array(), $page['payload']['files']);
-                continue;
+            $page = $scanner->scan($cursor, $limit, $include_sha256, $include_dirs);
+            $this->assertIsArray($page['entries']);
+            foreach ($page['entries'] as $entry) {
+                $entries[] = $entry;
             }
 
-            $this->assertSame(200, $page['http_status'], wp_json_encode($page['payload']));
-            $payload = $page['payload'];
-            $this->assertTrue($payload['success']);
-            foreach ($payload['files'] as $file) {
-                $files[] = $file;
-            }
-
-            if (empty($payload['has_more'])) {
-                $this->assertNull($payload['next_cursor']);
-                $this->assertTrue($payload['manifest_complete']);
+            if (empty($page['has_more'])) {
+                $this->assertNull($page['next_cursor']);
                 break;
             }
 
-            $cursor = $payload['next_cursor'];
-            $this->assertNotNull($cursor);
+            $this->assertNotNull($page['next_cursor']);
+            $cursor = (string) $page['next_cursor'];
         }
 
-        return $files;
+        return $entries;
     }
 
-    protected function expected_files(array $relative_contents): array
+    /**
+     * @return array<int, array{path: string, size: int, mtime: int, sha256?: string}>
+     */
+    protected function expected_scan_entries(array $relative_contents, bool $include_sha256 = false): array
     {
         $expected = array();
         foreach ($relative_contents as $relative => $contents) {
-            if (strpos($relative, '/cache/') !== false || strpos($relative, '/.stack2-backup/') !== false) {
+            if ($this->is_excluded_test_path($relative)) {
                 continue;
             }
-            $expected[$relative] = array(
+
+            $absolute = trailingslashit($this->wp_root) . $relative;
+            $entry = array(
                 'path' => $relative,
-                'sha256' => hash('sha256', $contents),
                 'size' => strlen($contents),
+                'mtime' => (int) filemtime($absolute),
             );
+            if ($include_sha256) {
+                $entry['sha256'] = hash('sha256', $contents);
+            }
+            $expected[$relative] = $entry;
         }
+
         ksort($expected);
         return array_values($expected);
+    }
+
+    protected function sort_entries_by_path(array $entries): array
+    {
+        usort($entries, static function (array $left, array $right): int {
+            return strcmp((string) $left['path'], (string) $right['path']);
+        });
+
+        return array_values($entries);
+    }
+
+    protected function is_excluded_test_path(string $relative): bool
+    {
+        $normalized = '/' . ltrim(wp_normalize_path($relative), '/');
+        $needles = array(
+            '/cache/',
+            '/.stack2-backup/',
+            '/wp-content/updraft/',
+        );
+
+        foreach ($needles as $needle) {
+            if (strpos($normalized, $needle) !== false) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function delete_tree(string $path): void

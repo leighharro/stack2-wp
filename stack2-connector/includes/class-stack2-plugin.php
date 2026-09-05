@@ -16,8 +16,8 @@ class Stack2_Plugin
     public const OPTION_LAST_SYNC_ERROR = 'stack2_last_sync_error';
 
     public const CRON_HOOK_SYNC = 'stack2_sync_inventory_event';
-    public const CRON_HOOK_MANIFEST = 'stack2_build_backup_manifest';
     public const ACTIVATION_REDIRECT_TRANSIENT = 'stack2_activation_redirect';
+    private const LEGACY_CRON_HOOK_MANIFEST = 'stack2_build_backup_manifest';
     private const LOCK_TRANSIENT = 'stack2_sync_lock';
 
     private Stack2_Logger $logger;
@@ -37,12 +37,16 @@ class Stack2_Plugin
         $this->update_checker = new Stack2_Update_Checker($this->logger);
         $this->sso_service = new Stack2_SSO_Service($this->logger);
 
+        $compressor = new Stack2_Backup_Compressor($this->logger);
         $this->backup_manager = new Stack2_Backup_Manager(
             $this->logger,
-            new Stack2_Backup_Compressor($this->logger),
+            $compressor,
             new Stack2_Database_Dumper($this->logger),
             new Stack2_Backup_Manifest(),
-            new Stack2_Backup_Cleaner()
+            new Stack2_Backup_Cleaner(),
+            null,
+            null,
+            new Stack2_Backup_File_Scanner($compressor)
         );
     }
 
@@ -51,7 +55,6 @@ class Stack2_Plugin
         add_action('rest_api_init', array($this, 'register_rest_controller'));
         add_action('init', array($this->sso_service, 'maybe_complete_login'), 1);
         add_action(self::CRON_HOOK_SYNC, array($this, 'handle_scheduled_sync'), 10, 2);
-        add_action(self::CRON_HOOK_MANIFEST, array($this, 'handle_manifest_build'), 10, 1);
         add_filter('cron_schedules', array($this, 'register_cron_schedule'));
 
         $this->update_checker->bootstrap();
@@ -70,6 +73,7 @@ class Stack2_Plugin
 
         $plugin = new self();
         $plugin->reschedule_cron();
+        wp_clear_scheduled_hook(self::LEGACY_CRON_HOOK_MANIFEST);
         if ($plugin->has_valid_credentials()) {
             $plugin->schedule_single_sync(10, 'activation', 0);
         } else {
@@ -80,6 +84,7 @@ class Stack2_Plugin
     public static function on_deactivation(): void
     {
         wp_clear_scheduled_hook(self::CRON_HOOK_SYNC);
+        wp_clear_scheduled_hook(self::LEGACY_CRON_HOOK_MANIFEST);
         delete_transient(self::LOCK_TRANSIENT);
     }
 
@@ -154,11 +159,6 @@ class Stack2_Plugin
     public function handle_scheduled_sync(int $attempt = 0, string $trigger = 'cron'): void
     {
         $this->sync_inventory($trigger, $attempt);
-    }
-
-    public function handle_manifest_build(string $job_id): void
-    {
-        $this->backup_manager->continue_manifest_build($job_id);
     }
 
     public function sync_inventory(string $trigger = 'manual', int $attempt = 0): array
