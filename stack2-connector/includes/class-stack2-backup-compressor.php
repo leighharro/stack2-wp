@@ -109,12 +109,20 @@ class Stack2_Backup_Compressor
         }
 
         $absolute = trailingslashit($this->wordpress_root) . $relative_path;
+        if ($this->is_excluded($absolute, is_dir($absolute))) {
+            return null;
+        }
+
         return $this->build_file_metadata($absolute);
     }
 
     public function is_excluded(string $path, bool $is_directory = false): bool
     {
         $normalized = wp_normalize_path($path);
+        if (!$is_directory && basename($normalized) === 'error_log') {
+            return true;
+        }
+
         if ($is_directory) {
             $normalized = trailingslashit($normalized);
         }

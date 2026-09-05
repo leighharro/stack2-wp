@@ -69,6 +69,47 @@ class BackupFileScannerTest extends BackupTestCase
         $this->assertSame(array('wp-content/uploads/keep.txt'), array_column($entries, 'path'));
     }
 
+    public function test_error_log_basename_is_excluded_and_normal_file_is_not(): void
+    {
+        $files = array(
+            'error_log' => 'root-php-log',
+            'wp-content/error_log' => 'nested-php-log',
+            'wp-content/uploads/keep.txt' => 'keep-me',
+            'wp-content/uploads/error_log.bak' => 'not-the-php-log',
+        );
+        $this->create_tree($files);
+
+        $compressor = $this->compressor();
+        $this->assertTrue($compressor->is_excluded(trailingslashit($this->wp_root) . 'error_log', false));
+        $this->assertTrue($compressor->is_excluded(trailingslashit($this->wp_root) . 'wp-content/error_log', false));
+        $this->assertFalse($compressor->is_excluded(trailingslashit($this->wp_root) . 'wp-content/uploads/keep.txt', false));
+        $this->assertFalse($compressor->is_excluded(trailingslashit($this->wp_root) . 'wp-content/uploads/error_log.bak', false));
+
+        $this->assertNull($compressor->metadata_for_relative_path('error_log'));
+        $this->assertNull($compressor->metadata_for_relative_path('wp-content/error_log'));
+        $this->assertNotNull($compressor->metadata_for_relative_path('wp-content/uploads/keep.txt'));
+
+        $entries = $this->collect_all_scan_pages($this->scanner(), 10);
+        $this->assertSame(
+            $this->expected_scan_entries($files),
+            $this->sort_entries_by_path($entries)
+        );
+        $this->assertSame(
+            array('wp-content/uploads/error_log.bak', 'wp-content/uploads/keep.txt'),
+            array_column($this->sort_entries_by_path($entries), 'path')
+        );
+
+        $stats = $this->scanner()->stats(array(
+            'error_log',
+            'wp-content/error_log',
+            'wp-content/uploads/keep.txt',
+        ), true);
+        $this->assertCount(1, $stats['stats']);
+        $this->assertSame('wp-content/uploads/keep.txt', $stats['stats'][0]['path']);
+        $this->assertSame(array('error_log', 'wp-content/error_log'), $stats['missing']);
+        $this->assertSame(array(), $stats['failed']);
+    }
+
     public function test_default_scan_omits_sha256(): void
     {
         $this->write_file('wp-content/uploads/plain.txt', 'plain');
@@ -107,12 +148,10 @@ class BackupFileScannerTest extends BackupTestCase
         $this->assertSame(hash('sha256', 'present-body'), $result['stats'][0]['sha256']);
         $this->assertSame(strlen('present-body'), $result['stats'][0]['size']);
         $this->assertArrayHasKey('mtime', $result['stats'][0]);
-        $this->assertSame(array('wp-content/uploads/gone.txt'), $result['missing']);
-        $this->assertCount(2, $result['failed']);
-        $this->assertSame('wp-content/cache/hidden.txt', $result['failed'][0]['path']);
-        $this->assertSame('Path is excluded from backup inventory.', $result['failed'][0]['error']);
-        $this->assertSame('../outside.txt', $result['failed'][1]['path']);
-        $this->assertSame('Invalid path.', $result['failed'][1]['error']);
+        $this->assertSame(array('wp-content/uploads/gone.txt', 'wp-content/cache/hidden.txt'), $result['missing']);
+        $this->assertCount(1, $result['failed']);
+        $this->assertSame('../outside.txt', $result['failed'][0]['path']);
+        $this->assertSame('Invalid path.', $result['failed'][0]['error']);
     }
 
     public function test_stats_rejects_over_max_batch(): void
