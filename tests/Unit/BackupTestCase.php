@@ -160,6 +160,11 @@ abstract class BackupTestCase extends TestCase
     protected function is_excluded_test_path(string $relative): bool
     {
         $normalized = '/' . ltrim(wp_normalize_path($relative), '/');
+        $basename = strtolower(basename($normalized));
+        if ($basename === 'error_log' || $basename === 'php_errorlog' || $basename === 'debug.log' || str_ends_with($basename, '.log')) {
+            return true;
+        }
+
         $needles = array(
             '/cache/',
             '/.stack2-backup/',

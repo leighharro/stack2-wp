@@ -109,12 +109,20 @@ class Stack2_Backup_Compressor
         }
 
         $absolute = trailingslashit($this->wordpress_root) . $relative_path;
+        if ($this->is_excluded($absolute, is_dir($absolute))) {
+            return null;
+        }
+
         return $this->build_file_metadata($absolute);
     }
 
     public function is_excluded(string $path, bool $is_directory = false): bool
     {
         $normalized = wp_normalize_path($path);
+        if (!$is_directory && $this->is_excluded_log_basename(basename($normalized))) {
+            return true;
+        }
+
         if ($is_directory) {
             $normalized = trailingslashit($normalized);
         }
@@ -226,6 +234,21 @@ class Stack2_Backup_Compressor
     private function should_exclude(string $path): bool
     {
         return $this->is_excluded($path, is_dir($path));
+    }
+
+    /**
+     * PHP/host logs change while being read and must not be hashed.
+     * Matches error_log, php_errorlog, debug.log, and any *.log basename.
+     * Does not match names such as error_log.bak or something.log.bak.
+     */
+    private function is_excluded_log_basename(string $basename): bool
+    {
+        $name = strtolower($basename);
+        if ($name === 'error_log' || $name === 'php_errorlog' || $name === 'debug.log') {
+            return true;
+        }
+
+        return str_ends_with($name, '.log');
     }
 
     private function build_file_metadata(string $absolute_path): ?array

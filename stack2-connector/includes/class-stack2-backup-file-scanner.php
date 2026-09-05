@@ -202,10 +202,7 @@ class Stack2_Backup_File_Scanner
             }
 
             if ($this->compressor->is_excluded($absolute, is_dir($absolute))) {
-                $failed[] = array(
-                    'path' => $relative,
-                    'error' => 'Path is excluded from backup inventory.',
-                );
+                $missing[] = $relative;
                 continue;
             }
 
