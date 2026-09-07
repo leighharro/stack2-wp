@@ -94,6 +94,56 @@ function update_option($key, $value)
     return true;
 }
 
+function delete_option($key)
+{
+    unset($GLOBALS['stack2_options'][$key]);
+    return true;
+}
+
+function delete_transient($key)
+{
+    unset($GLOBALS['stack2_transients'][$key]);
+    return true;
+}
+
+function wp_clear_scheduled_hook($hook, $args = array())
+{
+    // Mirror WP: only events whose serialized args match are removed.
+    $GLOBALS['stack2_cron'] = array_values(array_filter(
+        $GLOBALS['stack2_cron'],
+        static function ($event) use ($hook, $args) {
+            if (($event['hook'] ?? '') !== $hook) {
+                return true;
+            }
+
+            return ($event['args'] ?? array()) !== $args;
+        }
+    ));
+    return true;
+}
+
+function wp_unschedule_hook($hook)
+{
+    $GLOBALS['stack2_cron'] = array_values(array_filter(
+        $GLOBALS['stack2_cron'],
+        static function ($event) use ($hook) {
+            return ($event['hook'] ?? '') !== $hook;
+        }
+    ));
+    return true;
+}
+
+function wp_schedule_event($timestamp, $recurrence, $hook, $args = array())
+{
+    $GLOBALS['stack2_cron'][] = array(
+        'timestamp' => $timestamp,
+        'hook' => $hook,
+        'args' => $args,
+        'schedule' => $recurrence,
+    );
+    return true;
+}
+
 function get_bloginfo($show)
 {
     return $show === 'version' ? '6.8' : '';
