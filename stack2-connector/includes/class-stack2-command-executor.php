@@ -174,7 +174,13 @@ class Stack2_Command_Executor
         delete_option(Stack2_Plugin::OPTION_BASE_URL);
         delete_option(Stack2_Plugin::OPTION_SITE_ID);
         delete_option(Stack2_Plugin::OPTION_API_KEY);
-        wp_clear_scheduled_hook(Stack2_Plugin::CRON_HOOK_SYNC);
+        // Live WP schedules this hook with args (recurring [0,"cron"], plus
+        // single events like [n,"retry"]). wp_clear_scheduled_hook($hook)
+        // only removes the empty-args variant; unschedule the whole hook.
+        if (function_exists('wp_unschedule_hook')) {
+            wp_unschedule_hook(Stack2_Plugin::CRON_HOOK_SYNC);
+        }
+        wp_clear_scheduled_hook(Stack2_Plugin::CRON_HOOK_SYNC, array(0, 'cron'));
         delete_transient('stack2_sync_lock');
 
         $this->logger->info('Disconnected from Stack2: credentials cleared.');

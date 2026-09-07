@@ -24,17 +24,18 @@ class CommandDisconnectTest extends TestCase
         $GLOBALS['stack2_transients'] = array(
             'stack2_sync_lock' => '1',
         );
-        $GLOBALS['stack2_cron'] = array(
-            array(
-                'timestamp' => time() + 60,
-                'hook' => Stack2_Plugin::CRON_HOOK_SYNC,
-                'args' => array(0, 'cron'),
-            ),
-        );
+        $GLOBALS['stack2_cron'] = array();
+        wp_schedule_event(time() + 30, 'stack2_custom', Stack2_Plugin::CRON_HOOK_SYNC, array(0, 'cron'));
+        wp_schedule_single_event(time() + 5, Stack2_Plugin::CRON_HOOK_SYNC, array(1, 'retry'));
+        wp_schedule_single_event(time() + 10, Stack2_Plugin::CRON_HOOK_SYNC, array(0, 'activation'));
+        wp_schedule_single_event(time() + 15, 'unrelated_hook', array());
     }
 
     public function test_executor_clears_credentials_and_stops_cron(): void
     {
+        $this->assertNotFalse(wp_next_scheduled(Stack2_Plugin::CRON_HOOK_SYNC, array(0, 'cron')));
+        $this->assertNotFalse(wp_next_scheduled(Stack2_Plugin::CRON_HOOK_SYNC, array(1, 'retry')));
+
         $executor = $this->executor();
         $result = $executor->execute('disconnect', null, null);
 
@@ -46,7 +47,19 @@ class CommandDisconnectTest extends TestCase
         $this->assertArrayNotHasKey(Stack2_Plugin::OPTION_API_KEY, $GLOBALS['stack2_options']);
         $this->assertSame('success', $GLOBALS['stack2_options'][Stack2_Plugin::OPTION_LAST_SYNC_STATUS]);
         $this->assertArrayNotHasKey('stack2_sync_lock', $GLOBALS['stack2_transients']);
-        $this->assertSame(array(), $GLOBALS['stack2_cron']);
+        $this->assertFalse(wp_next_scheduled(Stack2_Plugin::CRON_HOOK_SYNC, array(0, 'cron')));
+        $this->assertFalse(wp_next_scheduled(Stack2_Plugin::CRON_HOOK_SYNC, array(1, 'retry')));
+        $this->assertFalse(wp_next_scheduled(Stack2_Plugin::CRON_HOOK_SYNC, array(0, 'activation')));
+        $this->assertSame(array(), $this->cron_hooks(Stack2_Plugin::CRON_HOOK_SYNC));
+        $this->assertNotFalse(wp_next_scheduled('unrelated_hook', array()));
+    }
+
+    public function test_clear_scheduled_hook_without_args_does_not_remove_production_cron(): void
+    {
+        wp_clear_scheduled_hook(Stack2_Plugin::CRON_HOOK_SYNC);
+
+        $this->assertNotFalse(wp_next_scheduled(Stack2_Plugin::CRON_HOOK_SYNC, array(0, 'cron')));
+        $this->assertNotFalse(wp_next_scheduled(Stack2_Plugin::CRON_HOOK_SYNC, array(1, 'retry')));
     }
 
     public function test_signed_disconnect_command_returns_success(): void
@@ -64,6 +77,8 @@ class CommandDisconnectTest extends TestCase
         $this->assertNull($data['error']);
         $this->assertNull($data['inventory']);
         $this->assertSame('', (string) get_option(Stack2_Plugin::OPTION_API_KEY, ''));
+        $this->assertFalse(wp_next_scheduled(Stack2_Plugin::CRON_HOOK_SYNC, array(0, 'cron')));
+        $this->assertSame(array(), $this->cron_hooks(Stack2_Plugin::CRON_HOOK_SYNC));
     }
 
     public function test_disconnect_rejects_bad_hmac(): void
@@ -127,5 +142,18 @@ class CommandDisconnectTest extends TestCase
         $request->set_header('x-stack2-timestamp', $timestamp);
         $request->set_header('x-stack2-signature', $signature);
         $request->set_body($body);
+    }
+
+    /**
+     * @return array<int, array>
+     */
+    private function cron_hooks(string $hook): array
+    {
+        return array_values(array_filter(
+            $GLOBALS['stack2_cron'],
+            static function ($event) use ($hook) {
+                return ($event['hook'] ?? '') === $hook;
+            }
+        ));
     }
 }
