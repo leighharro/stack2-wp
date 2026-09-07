@@ -15,7 +15,7 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
 - Backup cleanup endpoint: `DELETE /wp-json/stack2/v1/backups/{job_id}`
 - Backup list endpoint: deprecated in stateless mode
 - HMAC SHA256 request signing and timestamp replay protection
-- Allowed commands: `install`, `update`, `activate`, `deactivate`, `delete`, `inventory`
+- Allowed commands: `install`, `update`, `activate`, `deactivate`, `delete`, `inventory`, `disconnect`
 - WP-Cron scheduled sync with retry backoff for transient failures
 - Manual Sync Now button in admin settings
 - Last sync status and safe error reporting
@@ -142,6 +142,18 @@ Job scratch files live under `wp-content/.stack2-backup/{job_id}/` (download tem
   "slug": "seo-by-rank-math"
 }
 ```
+
+### Disconnect (Platform-initiated)
+
+Platform should call this **while the site API key is still valid**, then tombstone the secret after a successful ack.
+
+- Action: `disconnect` (HMAC-signed like every other `/command`)
+- Body: `{ "action": "disconnect" }`
+- On success: HTTP 200, `{ "success": true, "error": null, "inventory": null }`
+- Deletes `stack2_base_url`, `stack2_site_id`, and `stack2_api_key`, and unschedules inventory cron
+- A later command with empty local credentials returns HTTP 503 (`Stack2 credentials are not configured.`) — treat that as already disconnected
+
+Platform / GuaranaApp should send `action: "disconnect"` (not `clear_credentials`).
 
 ## Command Response Shape
 
