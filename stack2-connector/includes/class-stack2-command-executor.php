@@ -38,6 +38,9 @@ class Stack2_Command_Executor
 
                 case 'delete':
                     return $this->delete_plugin($plugin_file, $slug);
+
+                case 'disconnect':
+                    return $this->disconnect();
             }
 
             return array('success' => false, 'error' => 'Unsupported action.', 'inventory' => null);
@@ -160,6 +163,23 @@ class Stack2_Command_Executor
         }
 
         return array('success' => true, 'error' => null, 'inventory' => $this->inventory_collector->collect($this->site_id));
+    }
+
+    /**
+     * Platform-initiated disconnect: drop the local HMAC secret and routing IDs
+     * while the inbound request is still signed with the current key.
+     */
+    private function disconnect(): array
+    {
+        delete_option(Stack2_Plugin::OPTION_BASE_URL);
+        delete_option(Stack2_Plugin::OPTION_SITE_ID);
+        delete_option(Stack2_Plugin::OPTION_API_KEY);
+        wp_clear_scheduled_hook(Stack2_Plugin::CRON_HOOK_SYNC);
+        delete_transient('stack2_sync_lock');
+
+        $this->logger->info('Disconnected from Stack2: credentials cleared.');
+
+        return array('success' => true, 'error' => null, 'inventory' => null);
     }
 
     private function resolve_plugin_file(?string $plugin_file, ?string $slug): ?string
