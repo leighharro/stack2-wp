@@ -243,4 +243,126 @@ class BackupApiAgentInventoryTest extends BackupTestCase
         $this->assertSame(200, $response->get_status());
         $this->assertTrue($response->get_data()['success']);
     }
+
+    public function test_scan_and_stats_apply_signed_body_exclude_patterns(): void
+    {
+        $this->create_tree(array(
+            'wp-content/uploads/keep.txt' => 'keep-me',
+            'wp-content/custom-skip/secret.txt' => 'platform-only',
+            'wp-content/cache/generated.txt' => 'local-default-only',
+            'wp-content/themes/Divi/core/components/cache/Directory.php' => '<?php',
+        ));
+
+        $manager = $this->manager();
+        $manager->prepare_backup('b6', true, false, gmdate('c'), 'job_excludes');
+        $api = $this->api($manager);
+
+        $scan_body = wp_json_encode(array(
+            'exclude_patterns' => array('/custom-skip/'),
+            'unknown_future_key' => true,
+        ));
+        $scan = new WP_REST_Request();
+        $scan->set_method('POST');
+        $this->sign_request($scan, 'POST', '/wp-json/stack2/v1/backups/job_excludes/files/scan', $scan_body);
+        $scan->set_param('job_id', 'job_excludes');
+        $scan->set_param('limit', 50);
+
+        $scan_response = $api->scan_files($scan);
+        $this->assertSame(200, $scan_response->get_status());
+        $paths = array_column($this->sort_entries_by_path($scan_response->get_data()['entries']), 'path');
+        $this->assertSame(
+            array(
+                'wp-content/cache/generated.txt',
+                'wp-content/themes/Divi/core/components/cache/Directory.php',
+                'wp-content/uploads/keep.txt',
+            ),
+            $paths
+        );
+
+        $stats_body = wp_json_encode(array(
+            'paths' => array(
+                'wp-content/uploads/keep.txt',
+                'wp-content/custom-skip/secret.txt',
+                'wp-content/cache/generated.txt',
+            ),
+            'include_sha256' => true,
+            'exclude_patterns' => array('/custom-skip/'),
+            'unknown_future_key' => array('ok' => 1),
+        ));
+        $stats = new WP_REST_Request();
+        $stats->set_method('POST');
+        $this->sign_request($stats, 'POST', '/wp-json/stack2/v1/backups/job_excludes/files/stats', $stats_body);
+        $stats->set_param('job_id', 'job_excludes');
+
+        $stats_response = $api->stat_files($stats);
+        $this->assertSame(200, $stats_response->get_status());
+        $data = $stats_response->get_data();
+        $this->assertSame(
+            array(
+                'wp-content/uploads/keep.txt',
+                'wp-content/cache/generated.txt',
+            ),
+            array_column($data['stats'], 'path')
+        );
+        $this->assertSame(array('wp-content/custom-skip/secret.txt'), $data['missing']);
+    }
+
+    public function test_scan_prefers_hmac_body_exclude_patterns_over_query(): void
+    {
+        $this->create_tree(array(
+            'wp-content/uploads/keep.txt' => 'keep-me',
+            'wp-content/body-skip/a.txt' => 'from-body',
+            'wp-content/query-skip/b.txt' => 'from-query',
+        ));
+
+        $manager = $this->manager();
+        $manager->prepare_backup('b7', true, false, gmdate('c'), 'job_prefers_body');
+        $api = $this->api($manager);
+
+        $body = wp_json_encode(array('exclude_patterns' => array('/body-skip/')));
+        $request = new WP_REST_Request();
+        $request->set_method('POST');
+        $this->sign_request($request, 'POST', '/wp-json/stack2/v1/backups/job_prefers_body/files/scan', $body);
+        $request->set_param('job_id', 'job_prefers_body');
+        $request->set_param('limit', 50);
+        $request->set_param('exclude_patterns', array('/query-skip/'));
+
+        $response = $api->scan_files($request);
+        $paths = array_column($this->sort_entries_by_path($response->get_data()['entries']), 'path');
+        $this->assertSame(
+            array(
+                'wp-content/query-skip/b.txt',
+                'wp-content/uploads/keep.txt',
+            ),
+            $paths
+        );
+    }
+
+    public function test_scan_omitted_exclude_patterns_uses_local_defaults(): void
+    {
+        $this->create_tree(array(
+            'wp-content/themes/Divi/core/components/cache/Directory.php' => '<?php',
+            'wp-content/cache/object/x' => 'generated',
+            'wp-content/uploads/keep.txt' => 'keep-me',
+        ));
+
+        $manager = $this->manager();
+        $manager->prepare_backup('b8', true, false, gmdate('c'), 'job_default_excludes');
+        $api = $this->api($manager);
+
+        $request = new WP_REST_Request();
+        $this->sign_request($request, 'GET', '/wp-json/stack2/v1/backups/job_default_excludes/files/scan', '');
+        $request->set_param('job_id', 'job_default_excludes');
+        $request->set_param('limit', 50);
+
+        $response = $api->scan_files($request);
+        $this->assertSame(200, $response->get_status());
+        $this->assertSame(
+            array(
+                'wp-content/themes/Divi/core/components/cache/Directory.php',
+                'wp-content/uploads/keep.txt',
+            ),
+            array_column($this->sort_entries_by_path($response->get_data()['entries']), 'path')
+        );
+    }
 }

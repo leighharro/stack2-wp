@@ -89,22 +89,52 @@ class Stack2_Update_Checker
         delete_transient(self::CACHE_TRANSIENT);
     }
 
+    /**
+     * Clear cached update data and fetch the latest Connector release now.
+     *
+     * @return array{
+     *     success: bool,
+     *     error: ?string,
+     *     status: string,
+     *     installed_version: string,
+     *     available_version: ?string,
+     *     latest_version: ?string,
+     *     has_update: bool
+     * }
+     */
     public function force_check(): array
     {
+        $installed = STACK2_CONNECTOR_VERSION;
         $this->clear_cache();
         delete_site_transient('update_plugins');
 
-        $release = $this->get_release_info();
-        if ($release === null) {
-            return array('success' => false, 'error' => 'Unable to reach GitHub for release information.');
+        if (function_exists('wp_update_plugins')) {
+            wp_update_plugins();
         }
 
-        $has_update = version_compare($release['version'], STACK2_CONNECTOR_VERSION, '>');
+        $release = $this->get_release_info();
+        if ($release === null) {
+            return array(
+                'success' => false,
+                'error' => 'Unable to reach GitHub for release information.',
+                'status' => 'check_failed',
+                'installed_version' => $installed,
+                'available_version' => null,
+                'latest_version' => null,
+                'has_update' => false,
+            );
+        }
+
+        $available = trim((string) ($release['version'] ?? ''));
+        $has_update = $available !== '' && version_compare($available, $installed, '>');
 
         return array(
             'success' => true,
             'error' => null,
-            'latest_version' => $release['version'],
+            'status' => $has_update ? 'update_available' : 'up_to_date',
+            'installed_version' => $installed,
+            'available_version' => $available !== '' ? $available : null,
+            'latest_version' => $available !== '' ? $available : null,
             'has_update' => $has_update,
         );
     }

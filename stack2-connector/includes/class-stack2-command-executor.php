@@ -9,12 +9,18 @@ class Stack2_Command_Executor
     private Stack2_Inventory_Collector $inventory_collector;
     private Stack2_Logger $logger;
     private string $site_id;
+    private ?Stack2_Update_Checker $update_checker;
 
-    public function __construct(Stack2_Inventory_Collector $inventory_collector, Stack2_Logger $logger, string $site_id)
-    {
+    public function __construct(
+        Stack2_Inventory_Collector $inventory_collector,
+        Stack2_Logger $logger,
+        string $site_id,
+        ?Stack2_Update_Checker $update_checker = null
+    ) {
         $this->inventory_collector = $inventory_collector;
         $this->logger = $logger;
         $this->site_id = $site_id;
+        $this->update_checker = $update_checker;
     }
 
     public function execute(string $action, ?string $plugin_file, ?string $slug): array
@@ -41,6 +47,9 @@ class Stack2_Command_Executor
 
                 case 'disconnect':
                     return $this->disconnect();
+
+                case 'check_updates':
+                    return $this->check_updates();
             }
 
             return array('success' => false, 'error' => 'Unsupported action.', 'inventory' => null);
@@ -186,6 +195,28 @@ class Stack2_Command_Executor
         $this->logger->info('Disconnected from Stack2: credentials cleared.');
 
         return array('success' => true, 'error' => null, 'inventory' => null);
+    }
+
+    /**
+     * Force an immediate Connector update check (clears WP/plugin caches).
+     *
+     * @return array<string, mixed>
+     */
+    private function check_updates(): array
+    {
+        $checker = $this->update_checker ?? new Stack2_Update_Checker($this->logger);
+        $result = $checker->force_check();
+        $success = !empty($result['success']);
+
+        return array(
+            'success' => $success,
+            'error' => $result['error'] ?? ($success ? null : 'Update check failed.'),
+            'inventory' => null,
+            'status' => (string) ($result['status'] ?? ($success ? 'up_to_date' : 'check_failed')),
+            'installed_version' => (string) ($result['installed_version'] ?? STACK2_CONNECTOR_VERSION),
+            'available_version' => $result['available_version'] ?? null,
+            'http_status' => $success ? 200 : 502,
+        );
     }
 
     private function resolve_plugin_file(?string $plugin_file, ?string $slug): ?string

@@ -76,7 +76,7 @@ class Stack2_REST_Controller
         $plugin_file = isset($payload['plugin']) ? sanitize_text_field((string) $payload['plugin']) : null;
         $slug = isset($payload['slug']) ? sanitize_title((string) $payload['slug']) : null;
 
-        $allowed = array('install', 'update', 'activate', 'deactivate', 'delete', 'inventory', 'disconnect');
+        $allowed = array('install', 'update', 'activate', 'deactivate', 'delete', 'inventory', 'disconnect', 'check_updates');
         if (!in_array($action, $allowed, true)) {
             return new WP_REST_Response(array(
                 'success' => false,
@@ -86,16 +86,24 @@ class Stack2_REST_Controller
         }
 
         $result = $this->command_executor->execute($action, $plugin_file, $slug);
-        $status = $result['success'] ? 200 : 400;
+        $status = $result['success'] ? 200 : (int) ($result['http_status'] ?? 400);
 
         if (!$result['success']) {
             $this->logger->error('Command rejected.', array('action' => $action, 'error' => $result['error']));
         }
 
-        return new WP_REST_Response(array(
+        $response = array(
             'success' => (bool) $result['success'],
             'error' => $result['error'],
             'inventory' => $result['inventory'] ?? null,
-        ), $status);
+        );
+
+        foreach (array('status', 'installed_version', 'available_version') as $key) {
+            if (array_key_exists($key, $result)) {
+                $response[$key] = $result[$key];
+            }
+        }
+
+        return new WP_REST_Response($response, $status);
     }
 }

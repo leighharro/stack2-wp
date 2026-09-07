@@ -7,15 +7,16 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
 - Inventory sync to Stack2 endpoint: `POST /api/websites/plugin-inventory`
 - Signed command endpoint: `POST /wp-json/stack2/v1/command`
 - Backup initiation endpoint: `POST /wp-json/stack2/v1/backups/initiate` (small agent-mode envelope; no inline file list)
-- Backup file scan: `GET /wp-json/stack2/v1/backups/{job_id}/files/scan?cursor=&limit=`
+- Backup file scan: `GET|POST /wp-json/stack2/v1/backups/{job_id}/files/scan?cursor=&limit=`
 - Backup file stats: `POST /wp-json/stack2/v1/backups/{job_id}/files/stats`
+- Force Connector update check: HMAC command `check_updates`
 - Backup status endpoint: deprecated in stateless mode
 - Backup database table download endpoint: `GET /wp-json/stack2/v1/backups/{job_id}/database/table/{base64url_table_name}`
 - Backup file download endpoint: `GET /wp-json/stack2/v1/backups/{job_id}/files/{base64url_relative_path}`
 - Backup cleanup endpoint: `DELETE /wp-json/stack2/v1/backups/{job_id}`
 - Backup list endpoint: deprecated in stateless mode
 - HMAC SHA256 request signing and timestamp replay protection
-- Allowed commands: `install`, `update`, `activate`, `deactivate`, `delete`, `inventory`, `disconnect`
+- Allowed commands: `install`, `update`, `activate`, `deactivate`, `delete`, `inventory`, `disconnect`, `check_updates`
 - WP-Cron scheduled sync with retry backoff for transient failures
 - Manual Sync Now button in admin settings
 - Last sync status and safe error reporting
@@ -98,20 +99,22 @@ If `job_id` is provided and matches `[A-Za-z0-9_-]` (max 128 chars), the plugin 
 
 The initiate response is a small JSON envelope. `manifest.files` is always an empty array. `manifest_mode` is `"agent"`. File inventory is Platform-driven:
 
-`GET /wp-json/stack2/v1/backups/{job_id}/files/scan?cursor=&limit=&include_sha256=0&include_dirs=0`
+`GET|POST /wp-json/stack2/v1/backups/{job_id}/files/scan?cursor=&limit=&include_sha256=0&include_dirs=0`
 
-- HMAC-signed like other GET backup routes. Query string is **not** part of the signed path.
+- HMAC-signed. Query string is **not** part of the signed path. Prefer a JSON body (GET or POST) so `exclude_patterns` is covered by the HMAC body hash.
 - Default `limit` is 500; hard max is 2000. Successful pages always return HTTP `200` (never `202`).
 - Each `entries[]` item is `{path, size, mtime}` plus optional `sha256` when `include_sha256=true`.
 - `cursor` is an opaque base64url JSON DFS stack. Omit/empty starts at ABSPATH. Resume with `next_cursor` while `has_more` is true.
 - Prefer leaving `include_sha256` false and hashing via stats batches.
+- Optional `exclude_patterns` (array of strings): when present and non-empty, **replaces** local `EXCLUSION_PATTERNS` for that request (no merge). Absent or empty falls back to local defaults (no bare `/cache/`). Log basename exclusions (`error_log`, `php_errorlog`, `debug.log`, `*.log`) still apply.
 
 `POST /wp-json/stack2/v1/backups/{job_id}/files/stats`
 
-- HMAC-signed POST. Body: `{ "paths": ["..."], "include_sha256": true }`.
+- HMAC-signed POST. Body: `{ "paths": ["..."], "include_sha256": true, "exclude_patterns": ["/wp-content/cache/"] }`.
 - Maximum 200 paths per request. Over that limit returns HTTP `400`.
 - Response: `{ success, stats: [{path, size, mtime, sha256?}], missing: [], failed: [{path, error}] }`.
 - Uses the mtime-keyed `stack2_cksum_*` checksum cache.
+- `exclude_patterns` follows the same replace-or-fallback rules as scan. Unknown JSON keys are ignored.
 
 Initiate advertises the same limits as `scan.default_limit` / `scan.max_limit` and `stats.default_batch` / `stats.max_batch`. Singular aliases (`/backup/...`) remain registered.
 
@@ -154,6 +157,17 @@ Platform should call this **while the site API key is still valid**, then tombst
 - A later command with empty local credentials returns HTTP 503 (`Stack2 credentials are not configured.`) — treat that as already disconnected
 
 Platform / GuaranaApp should send `action: "disconnect"` (not `clear_credentials`).
+
+### Force Connector update check
+
+Platform can force WordPress to refresh the Connector update cache immediately after a release is tagged, instead of waiting for WP-Cron.
+
+- Action: `check_updates` (HMAC-signed like every other `/command`)
+- Body: `{ "action": "check_updates" }`
+- Clears `stack2_connector_update_cache` and the `update_plugins` site transient, then calls `wp_update_plugins()`
+- On success: HTTP 200, `{ "success": true, "error": null, "inventory": null, "status": "up_to_date"|"update_available", "installed_version": "1.1.15", "available_version": "1.1.15" }`
+- On GitHub/update-API failure: HTTP 502, `{ "success": false, "error": "...", "inventory": null, "status": "check_failed", "installed_version": "1.1.15", "available_version": null }`
+- Site must be connected (empty credentials still return HTTP 503)
 
 ## Command Response Shape
 

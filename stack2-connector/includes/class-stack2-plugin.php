@@ -93,7 +93,8 @@ class Stack2_Plugin
         $executor = new Stack2_Command_Executor(
             $this->inventory_collector,
             $this->logger,
-            $this->get_site_id()
+            $this->get_site_id(),
+            $this->update_checker
         );
 
         $controller = new Stack2_REST_Controller(
