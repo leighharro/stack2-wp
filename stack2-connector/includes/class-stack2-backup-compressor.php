@@ -218,7 +218,8 @@ class Stack2_Backup_Compressor
     private const EXCLUSION_PATTERNS = array(
         '/node_modules/',
         '/.git/',
-        '/cache/',
+        // Known generated-cache roots only. A bare '/cache/' substring would
+        // skip theme/plugin code such as Divi's core/components/cache/.
         '/wp-content/cache/',
         '/wp-content/upgrade/',
         '/.stack2-backup/',
