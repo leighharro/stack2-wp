@@ -69,6 +69,74 @@ class BackupFileScannerTest extends BackupTestCase
         $this->assertSame(array('wp-content/uploads/keep.txt'), array_column($entries, 'path'));
     }
 
+    public function test_theme_and_plugin_cache_code_folders_are_not_excluded(): void
+    {
+        $root = trailingslashit($this->wp_root);
+        $files = array(
+            'wp-content/themes/Divi/core/components/cache/Directory.php' => '<?php class ET_Core_Cache_Directory {}',
+            'wp-content/themes/Divi/core/components/Cache.php' => '<?php class ET_Core_Cache {}',
+            'wp-content/themes/Divi/et-cache/keep.txt' => 'divi-et-cache',
+            'wp-content/plugins/sample/Cache/Store.php' => '<?php class Sample_Cache_Store {}',
+            'wp-content/cache/object/x' => 'generated-object-cache',
+            'wp-content/uploads/cache/tmp.bin' => 'generated-uploads-cache',
+            'wp-content/uploads/keep.txt' => 'keep-me',
+        );
+        $this->create_tree($files);
+
+        $compressor = $this->compressor();
+        $this->assertFalse($compressor->is_excluded($root . 'wp-content/themes/Divi/core/components/cache/Directory.php', false));
+        $this->assertFalse($compressor->is_excluded($root . 'wp-content/themes/Divi/core/components/cache', true));
+        $this->assertFalse($compressor->is_excluded($root . 'wp-content/themes/Divi/core/components/Cache.php', false));
+        $this->assertFalse($compressor->is_excluded($root . 'wp-content/themes/Divi/et-cache', true));
+        $this->assertFalse($compressor->is_excluded($root . 'wp-content/plugins/sample/Cache/Store.php', false));
+        $this->assertTrue($compressor->is_excluded($root . 'wp-content/cache/object/x', false));
+        $this->assertTrue($compressor->is_excluded($root . 'wp-content/cache', true));
+        $this->assertTrue($compressor->is_excluded($root . 'wp-content/uploads/cache/tmp.bin', false));
+
+        $this->assertNotNull($compressor->metadata_for_relative_path('wp-content/themes/Divi/core/components/cache/Directory.php'));
+        $this->assertNotNull($compressor->metadata_for_relative_path('wp-content/themes/Divi/core/components/Cache.php'));
+        $this->assertNull($compressor->metadata_for_relative_path('wp-content/cache/object/x'));
+        $this->assertNull($compressor->metadata_for_relative_path('wp-content/uploads/cache/tmp.bin'));
+
+        $entries = $this->collect_all_scan_pages($this->scanner(), 10);
+        $this->assertSame(
+            $this->expected_scan_entries($files),
+            $this->sort_entries_by_path($entries)
+        );
+        $this->assertSame(
+            array(
+                'wp-content/plugins/sample/Cache/Store.php',
+                'wp-content/themes/Divi/core/components/Cache.php',
+                'wp-content/themes/Divi/core/components/cache/Directory.php',
+                'wp-content/themes/Divi/et-cache/keep.txt',
+                'wp-content/uploads/keep.txt',
+            ),
+            array_column($this->sort_entries_by_path($entries), 'path')
+        );
+
+        $stats = $this->scanner()->stats(array(
+            'wp-content/themes/Divi/core/components/cache/Directory.php',
+            'wp-content/themes/Divi/core/components/Cache.php',
+            'wp-content/cache/object/x',
+            'wp-content/uploads/cache/tmp.bin',
+        ), true);
+        $this->assertSame(
+            array(
+                'wp-content/themes/Divi/core/components/cache/Directory.php',
+                'wp-content/themes/Divi/core/components/Cache.php',
+            ),
+            array_column($stats['stats'], 'path')
+        );
+        $this->assertSame(
+            array(
+                'wp-content/cache/object/x',
+                'wp-content/uploads/cache/tmp.bin',
+            ),
+            $stats['missing']
+        );
+        $this->assertSame(array(), $stats['failed']);
+    }
+
     public function test_log_basenames_are_excluded_and_bak_files_are_not(): void
     {
         $root = trailingslashit($this->wp_root);

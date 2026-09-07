@@ -166,7 +166,8 @@ abstract class BackupTestCase extends TestCase
         }
 
         $needles = array(
-            '/cache/',
+            '/wp-content/cache/',
+            '/uploads/cache/',
             '/.stack2-backup/',
             '/wp-content/updraft/',
         );
