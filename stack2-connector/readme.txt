@@ -4,7 +4,7 @@ Tags: stack2, automation, plugin management, backup, inventory
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 1.1.14
+Stable tag: 1.1.15
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -71,6 +71,10 @@ Automatic scheduled sync relies on WP-Cron. Manual sync is available from plugin
 Stack2 Connector is not distributed on wordpress.org. It checks GitHub Releases (https://github.com/leighharro/stack2-wp/releases/latest) for new versions and integrates with WordPress's normal plugin update UI, including the built-in "Enable auto-updates" option on the Plugins page. Downloaded packages are verified against the release's published SHA256 checksum before install. Like scheduled sync, checking for updates and background auto-updates rely on WP-Cron; a manual "Check for Updates" button is available from plugin settings.
 
 == Changelog ==
+
+= 1.1.15 =
+- Accept optional HMAC-signed `exclude_patterns` on agent file scan/stats. A non-empty list replaces local `EXCLUSION_PATTERNS` for that request (no merge). Absent or empty keeps local defaults (post-1.1.14: no bare `/cache/`). Log basename exclusions still apply so changing `*.log` files are not hashed.
+- HMAC command `check_updates` clears plugin update caches and forces a Connector update check, returning installed/available versions and status `up_to_date`, `update_available`, or `check_failed`.
 
 = 1.1.14 =
 - Stop excluding theme/plugin code folders named `cache/` (e.g. Divi `core/components/cache/Directory.php`). Backup inventory now excludes only known generated-cache roots such as `wp-content/cache/` and `uploads/cache/`.

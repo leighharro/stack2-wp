@@ -64,9 +64,10 @@ class Stack2_Backup_File_Scanner
     }
 
     /**
+     * @param array<int, string>|null $exclude_patterns Platform list for this request, or null for local defaults.
      * @return array{entries: array<int, array>, next_cursor: ?string, has_more: bool, scanned: int}
      */
-    public function scan(?string $cursor, $limit, bool $include_sha256 = false, bool $include_dirs = false): array
+    public function scan(?string $cursor, $limit, bool $include_sha256 = false, bool $include_dirs = false, ?array $exclude_patterns = null): array
     {
         $limit = self::normalize_scan_limit($limit);
         $stack = $this->decode_cursor($cursor);
@@ -113,7 +114,7 @@ class Stack2_Backup_File_Scanner
                 $scanned++;
 
                 if (is_dir($absolute) && !is_link($absolute)) {
-                    if ($this->compressor->is_excluded($absolute, true)) {
+                    if ($this->compressor->is_excluded($absolute, true, $exclude_patterns)) {
                         continue;
                     }
 
@@ -135,7 +136,7 @@ class Stack2_Backup_File_Scanner
                     continue;
                 }
 
-                if ($this->compressor->is_excluded($absolute, false)) {
+                if ($this->compressor->is_excluded($absolute, false, $exclude_patterns)) {
                     continue;
                 }
 
@@ -158,9 +159,10 @@ class Stack2_Backup_File_Scanner
 
     /**
      * @param array<int, mixed> $paths
+     * @param array<int, string>|null $exclude_patterns Platform list for this request, or null for local defaults.
      * @return array{stats: array<int, array>, missing: array<int, string>, failed: array<int, array{path: string, error: string}>}
      */
-    public function stats(array $paths, bool $include_sha256 = true): array
+    public function stats(array $paths, bool $include_sha256 = true, ?array $exclude_patterns = null): array
     {
         if (count($paths) > self::MAX_STATS_BATCH) {
             throw new InvalidArgumentException(
@@ -201,7 +203,7 @@ class Stack2_Backup_File_Scanner
                 continue;
             }
 
-            if ($this->compressor->is_excluded($absolute, is_dir($absolute))) {
+            if ($this->compressor->is_excluded($absolute, is_dir($absolute), $exclude_patterns)) {
                 $missing[] = $relative;
                 continue;
             }

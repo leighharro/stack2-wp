@@ -116,7 +116,80 @@ class Stack2_Backup_Compressor
         return $this->build_file_metadata($absolute);
     }
 
-    public function is_excluded(string $path, bool $is_directory = false): bool
+    /**
+     * Local v1 defaults after 1.1.14 (no bare `/cache/`).
+     * Platform-supplied exclude_patterns replace this list for that request;
+     * they are not merged.
+     */
+    public const EXCLUSION_PATTERNS = array(
+        '/node_modules/',
+        '/.git/',
+        // Known generated-cache roots only. A bare '/cache/' substring would
+        // skip theme/plugin code such as Divi's core/components/cache/.
+        '/wp-content/cache/',
+        '/wp-content/upgrade/',
+        '/.stack2-backup/',
+        '/uploads/tmp/',
+        '/uploads/cache/',
+        '/wp-content/ai1wm-backups/',
+        '/wp-content/updraft/',
+        '/wp-content/wpvivid/',
+        '/wp-content/backwpup-',
+        '/wp-snapshots/',
+    );
+
+    /**
+     * Normalize a Platform-supplied exclude_patterns value.
+     * Returns a non-empty list, or null to fall back to local defaults.
+     *
+     * @param mixed $value
+     * @return array<int, string>|null
+     */
+    public static function normalize_exclusion_patterns($value): ?array
+    {
+        if (is_string($value)) {
+            $trimmed = trim($value);
+            if ($trimmed === '') {
+                return null;
+            }
+
+            $decoded = json_decode($trimmed, true);
+            if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
+                return null;
+            }
+
+            $value = $decoded;
+        }
+
+        if (!is_array($value)) {
+            return null;
+        }
+
+        $patterns = array();
+        foreach ($value as $item) {
+            if (!is_string($item) && !is_int($item) && !is_float($item)) {
+                continue;
+            }
+
+            $pattern = trim((string) $item);
+            if ($pattern === '') {
+                continue;
+            }
+
+            $patterns[] = $pattern;
+        }
+
+        if ($patterns === array()) {
+            return null;
+        }
+
+        return array_values(array_unique($patterns));
+    }
+
+    /**
+     * @param array<int, string>|null $exclusion_patterns Non-empty Platform list, or null/empty for local defaults.
+     */
+    public function is_excluded(string $path, bool $is_directory = false, ?array $exclusion_patterns = null): bool
     {
         $normalized = wp_normalize_path($path);
         if (!$is_directory && $this->is_excluded_log_basename(basename($normalized))) {
@@ -127,7 +200,14 @@ class Stack2_Backup_Compressor
             $normalized = trailingslashit($normalized);
         }
 
-        foreach (self::EXCLUSION_PATTERNS as $pattern) {
+        $patterns = ($exclusion_patterns !== null && $exclusion_patterns !== array())
+            ? $exclusion_patterns
+            : self::EXCLUSION_PATTERNS;
+
+        foreach ($patterns as $pattern) {
+            if (!is_string($pattern) || $pattern === '') {
+                continue;
+            }
             if (strpos($normalized, $pattern) !== false) {
                 return true;
             }
@@ -214,23 +294,6 @@ class Stack2_Backup_Compressor
             'files' => $manifest_files,
         );
     }
-
-    private const EXCLUSION_PATTERNS = array(
-        '/node_modules/',
-        '/.git/',
-        // Known generated-cache roots only. A bare '/cache/' substring would
-        // skip theme/plugin code such as Divi's core/components/cache/.
-        '/wp-content/cache/',
-        '/wp-content/upgrade/',
-        '/.stack2-backup/',
-        '/uploads/tmp/',
-        '/uploads/cache/',
-        '/wp-content/ai1wm-backups/',
-        '/wp-content/updraft/',
-        '/wp-content/wpvivid/',
-        '/wp-content/backwpup-',
-        '/wp-snapshots/',
-    );
 
     private function should_exclude(string $path): bool
     {

@@ -97,13 +97,13 @@ abstract class BackupTestCase extends TestCase
     /**
      * @return array<int, array>
      */
-    protected function collect_all_scan_pages(Stack2_Backup_File_Scanner $scanner, int $limit = 50, bool $include_sha256 = false, bool $include_dirs = false): array
+    protected function collect_all_scan_pages(Stack2_Backup_File_Scanner $scanner, int $limit = 50, bool $include_sha256 = false, bool $include_dirs = false, ?array $exclude_patterns = null): array
     {
         $entries = array();
         $cursor = '';
 
         for ($i = 0; $i < 1000; $i++) {
-            $page = $scanner->scan($cursor, $limit, $include_sha256, $include_dirs);
+            $page = $scanner->scan($cursor, $limit, $include_sha256, $include_dirs, $exclude_patterns);
             $this->assertIsArray($page['entries']);
             foreach ($page['entries'] as $entry) {
                 $entries[] = $entry;

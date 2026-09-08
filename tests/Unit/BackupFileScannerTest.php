@@ -303,4 +303,101 @@ class BackupFileScannerTest extends BackupTestCase
         $this->assertFalse($page['has_more']);
         $this->assertNull($page['next_cursor']);
     }
+
+    public function test_platform_exclude_patterns_replace_local_defaults(): void
+    {
+        $root = trailingslashit($this->wp_root);
+        $files = array(
+            'wp-content/uploads/keep.txt' => 'keep-me',
+            'wp-content/custom-skip/secret.txt' => 'platform-only',
+            'wp-content/cache/generated.txt' => 'would-be-local-default',
+        );
+        $this->create_tree($files);
+
+        $platform = array('/custom-skip/');
+        $compressor = $this->compressor();
+        $this->assertTrue($compressor->is_excluded($root . 'wp-content/custom-skip/secret.txt', false, $platform));
+        $this->assertFalse($compressor->is_excluded($root . 'wp-content/cache/generated.txt', false, $platform));
+        $this->assertFalse($compressor->is_excluded($root . 'wp-content/cache', true, $platform));
+
+        $entries = $this->collect_all_scan_pages($this->scanner(), 10, false, false, $platform);
+        $this->assertSame(
+            array(
+                'wp-content/cache/generated.txt',
+                'wp-content/uploads/keep.txt',
+            ),
+            array_column($this->sort_entries_by_path($entries), 'path')
+        );
+
+        $stats = $this->scanner()->stats(array(
+            'wp-content/uploads/keep.txt',
+            'wp-content/custom-skip/secret.txt',
+            'wp-content/cache/generated.txt',
+        ), true, $platform);
+        $this->assertSame(
+            array(
+                'wp-content/uploads/keep.txt',
+                'wp-content/cache/generated.txt',
+            ),
+            array_column($stats['stats'], 'path')
+        );
+        $this->assertSame(array('wp-content/custom-skip/secret.txt'), $stats['missing']);
+    }
+
+    public function test_platform_post_114_defaults_include_divi_cache_and_exclude_wp_content_cache(): void
+    {
+        $this->assertNotContains('/cache/', Stack2_Backup_Compressor::EXCLUSION_PATTERNS);
+
+        $files = array(
+            'wp-content/themes/Divi/core/components/cache/Directory.php' => '<?php class ET_Core_Cache_Directory {}',
+            'wp-content/cache/object/x' => 'generated-object-cache',
+            'wp-content/uploads/keep.txt' => 'keep-me',
+        );
+        $this->create_tree($files);
+
+        $platform = Stack2_Backup_Compressor::EXCLUSION_PATTERNS;
+        $entries = $this->collect_all_scan_pages($this->scanner(), 10, false, false, $platform);
+        $this->assertSame(
+            array(
+                'wp-content/themes/Divi/core/components/cache/Directory.php',
+                'wp-content/uploads/keep.txt',
+            ),
+            array_column($this->sort_entries_by_path($entries), 'path')
+        );
+
+        $stats = $this->scanner()->stats(array(
+            'wp-content/themes/Divi/core/components/cache/Directory.php',
+            'wp-content/cache/object/x',
+        ), true, $platform);
+        $this->assertSame(
+            array('wp-content/themes/Divi/core/components/cache/Directory.php'),
+            array_column($stats['stats'], 'path')
+        );
+        $this->assertSame(array('wp-content/cache/object/x'), $stats['missing']);
+    }
+
+    public function test_omitted_exclude_patterns_use_local_defaults(): void
+    {
+        $files = array(
+            'wp-content/themes/Divi/core/components/cache/Directory.php' => '<?php class ET_Core_Cache_Directory {}',
+            'wp-content/cache/object/x' => 'generated-object-cache',
+            'wp-content/uploads/keep.txt' => 'keep-me',
+        );
+        $this->create_tree($files);
+
+        $entries = $this->collect_all_scan_pages($this->scanner(), 10);
+        $this->assertSame(
+            array(
+                'wp-content/themes/Divi/core/components/cache/Directory.php',
+                'wp-content/uploads/keep.txt',
+            ),
+            array_column($this->sort_entries_by_path($entries), 'path')
+        );
+
+        $empty = $this->scanner()->scan('', 20, false, false, array());
+        $this->assertSame(
+            array_column($this->sort_entries_by_path($entries), 'path'),
+            array_column($this->sort_entries_by_path($empty['entries']), 'path')
+        );
+    }
 }

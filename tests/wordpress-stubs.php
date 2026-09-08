@@ -43,6 +43,8 @@ if (!defined('ARRAY_A')) {
 $GLOBALS['stack2_transients'] = array();
 $GLOBALS['stack2_options'] = array();
 $GLOBALS['stack2_cron'] = array();
+$GLOBALS['stack2_wp_update_plugins_calls'] = 0;
+$GLOBALS['stack2_http_get'] = null;
 
 function trailingslashit($value)
 {
@@ -104,6 +106,63 @@ function delete_transient($key)
 {
     unset($GLOBALS['stack2_transients'][$key]);
     return true;
+}
+
+function get_site_transient($key)
+{
+    return get_transient('site_' . $key);
+}
+
+function set_site_transient($key, $value, $expiration = 0)
+{
+    return set_transient('site_' . $key, $value, $expiration);
+}
+
+function delete_site_transient($key)
+{
+    return delete_transient('site_' . $key);
+}
+
+function wp_update_plugins()
+{
+    $GLOBALS['stack2_wp_update_plugins_calls'] = (int) ($GLOBALS['stack2_wp_update_plugins_calls'] ?? 0) + 1;
+}
+
+function wp_remote_get($url, $args = array())
+{
+    if (isset($GLOBALS['stack2_http_get']) && is_callable($GLOBALS['stack2_http_get'])) {
+        return $GLOBALS['stack2_http_get']($url, $args);
+    }
+
+    return new WP_Error('http_request_failed', 'HTTP requests are disabled in tests.');
+}
+
+function wp_remote_retrieve_response_code($response)
+{
+    if (is_wp_error($response)) {
+        return 0;
+    }
+
+    return (int) ($response['response']['code'] ?? 0);
+}
+
+function wp_remote_retrieve_body($response)
+{
+    if (is_wp_error($response)) {
+        return '';
+    }
+
+    return (string) ($response['body'] ?? '');
+}
+
+function plugin_basename($file)
+{
+    $normalized = str_replace('\\', '/', (string) $file);
+    if (preg_match('#/(stack2-connector/stack2-connector\.php)$#', $normalized, $matches)) {
+        return $matches[1];
+    }
+
+    return basename($normalized);
 }
 
 function wp_clear_scheduled_hook($hook, $args = array())
@@ -251,6 +310,17 @@ class WP_REST_Request
     private string $body = '';
     private string $route = '';
     private array $params = array();
+    private string $method = 'GET';
+
+    public function set_method(string $method): void
+    {
+        $this->method = strtoupper($method);
+    }
+
+    public function get_method()
+    {
+        return $this->method;
+    }
 
     public function set_header(string $name, string $value): void
     {

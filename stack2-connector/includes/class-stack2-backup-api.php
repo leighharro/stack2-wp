@@ -229,7 +229,8 @@ class Stack2_Backup_API
         }
 
         $path = $this->get_signed_path($request);
-        $auth = $this->verify($request, 'GET', $path, '');
+        $raw_body = (string) $request->get_body();
+        $auth = $this->verify($request, $this->request_http_method($request), $path, $raw_body);
         if (is_wp_error($auth)) {
             return $this->error_response_from_wp_error($auth);
         }
@@ -239,13 +240,30 @@ class Stack2_Backup_API
         $limit = (int) ($request->get_param('limit') ?? Stack2_Backup_File_Scanner::DEFAULT_SCAN_LIMIT);
         $include_sha256 = $this->request_bool($request->get_param('include_sha256'), false);
         $include_dirs = $this->request_bool($request->get_param('include_dirs'), false);
+        $body_payload = json_decode($raw_body, true);
+        $exclude_patterns = $this->exclude_patterns_from_request($request, is_array($body_payload) ? $body_payload : null);
+
+        if (is_array($body_payload)) {
+            if (isset($body_payload['cursor'])) {
+                $cursor = (string) $body_payload['cursor'];
+            }
+            if (isset($body_payload['limit'])) {
+                $limit = (int) $body_payload['limit'];
+            }
+            if (array_key_exists('include_sha256', $body_payload)) {
+                $include_sha256 = $this->request_bool($body_payload['include_sha256'], false);
+            }
+            if (array_key_exists('include_dirs', $body_payload)) {
+                $include_dirs = $this->request_bool($body_payload['include_dirs'], false);
+            }
+        }
 
         if (function_exists('set_time_limit')) {
             @set_time_limit(30);
         }
 
         try {
-            $page = $this->backup_manager->scan_files($job_id, $cursor, $limit, $include_sha256, $include_dirs);
+            $page = $this->backup_manager->scan_files($job_id, $cursor, $limit, $include_sha256, $include_dirs, $exclude_patterns);
         } catch (InvalidArgumentException $e) {
             return new WP_REST_Response(array(
                 'success' => false,
@@ -324,9 +342,10 @@ class Stack2_Backup_API
         }
 
         $include_sha256 = $this->request_bool($payload['include_sha256'] ?? true, true);
+        $exclude_patterns = $this->exclude_patterns_from_request($request, $payload);
 
         try {
-            $result = $this->backup_manager->stat_files($job_id, $payload['paths'], $include_sha256);
+            $result = $this->backup_manager->stat_files($job_id, $payload['paths'], $include_sha256, $exclude_patterns);
         } catch (InvalidArgumentException $e) {
             return new WP_REST_Response(array(
                 'success' => false,
@@ -580,7 +599,7 @@ class Stack2_Backup_API
     private function register_scan_route(string $route): void
     {
         register_rest_route('stack2/v1', $route, array(
-            'methods' => WP_REST_Server::READABLE,
+            'methods' => array(WP_REST_Server::READABLE, WP_REST_Server::CREATABLE),
             'callback' => array($this, 'scan_files'),
             'permission_callback' => '__return_true',
             'args' => array(
@@ -606,6 +625,39 @@ class Stack2_Backup_API
                 ),
             ),
         ));
+    }
+
+    /**
+     * Prefer HMAC-signed JSON body exclude_patterns over unsigned query.
+     * Absent, empty, or non-list values fall back to local EXCLUSION_PATTERNS.
+     *
+     * @param array<string, mixed>|null $payload
+     * @return array<int, string>|null
+     */
+    private function exclude_patterns_from_request(WP_REST_Request $request, $payload = null): ?array
+    {
+        if (is_array($payload) && array_key_exists('exclude_patterns', $payload)) {
+            return Stack2_Backup_Compressor::normalize_exclusion_patterns($payload['exclude_patterns']);
+        }
+
+        $query = $request->get_param('exclude_patterns');
+        if ($query !== null && $query !== '') {
+            return Stack2_Backup_Compressor::normalize_exclusion_patterns($query);
+        }
+
+        return null;
+    }
+
+    private function request_http_method(WP_REST_Request $request): string
+    {
+        if (method_exists($request, 'get_method')) {
+            $method = strtoupper(trim((string) $request->get_method()));
+            if ($method !== '') {
+                return $method;
+            }
+        }
+
+        return 'GET';
     }
 
     private function register_stats_route(string $route): void

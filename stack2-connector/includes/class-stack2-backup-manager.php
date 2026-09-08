@@ -114,24 +114,26 @@ class Stack2_Backup_Manager
     }
 
     /**
+     * @param array<int, string>|null $exclude_patterns
      * @return array{entries: array<int, array>, next_cursor: ?string, has_more: bool, scanned: int}
      */
-    public function scan_files(string $job_id, ?string $cursor, $limit, bool $include_sha256 = false, bool $include_dirs = false): array
+    public function scan_files(string $job_id, ?string $cursor, $limit, bool $include_sha256 = false, bool $include_dirs = false, ?array $exclude_patterns = null): array
     {
         $this->require_job($job_id);
 
-        return $this->file_scanner->scan($cursor, $limit, $include_sha256, $include_dirs);
+        return $this->file_scanner->scan($cursor, $limit, $include_sha256, $include_dirs, $exclude_patterns);
     }
 
     /**
      * @param array<int, mixed> $paths
+     * @param array<int, string>|null $exclude_patterns
      * @return array{stats: array<int, array>, missing: array<int, string>, failed: array<int, array{path: string, error: string}>}
      */
-    public function stat_files(string $job_id, array $paths, bool $include_sha256 = true): array
+    public function stat_files(string $job_id, array $paths, bool $include_sha256 = true, ?array $exclude_patterns = null): array
     {
         $this->require_job($job_id);
 
-        return $this->file_scanner->stats($paths, $include_sha256);
+        return $this->file_scanner->stats($paths, $include_sha256, $exclude_patterns);
     }
 
     /**
