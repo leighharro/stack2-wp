@@ -400,4 +400,202 @@ class BackupFileScannerTest extends BackupTestCase
             array_column($this->sort_entries_by_path($empty['entries']), 'path')
         );
     }
+
+    public function test_empty_exclude_patterns_does_not_disable_exclusions(): void
+    {
+        $root = trailingslashit($this->wp_root);
+        $files = array(
+            'wp-content/uploads/keep.txt' => 'keep-me',
+            'wp-content/cache/generated.txt' => 'local-default',
+            'wp-content/debug.log' => 'wp-debug',
+            'error_log' => 'root-php-log',
+            'wp-content/uploads/foo.log' => 'generic-log',
+        );
+        $this->create_tree($files);
+
+        $compressor = $this->compressor();
+        $this->assertTrue($compressor->is_excluded($root . 'wp-content/cache/generated.txt', false, array()));
+        $this->assertTrue($compressor->is_excluded($root . 'wp-content/debug.log', false, array()));
+        $this->assertFalse($compressor->is_excluded($root . 'wp-content/cache/generated.txt', false, array(), true));
+
+        $empty_patterns = $this->collect_all_scan_pages($this->scanner(), 20, false, false, array());
+        $this->assertSame(
+            array('wp-content/uploads/keep.txt'),
+            array_column($this->sort_entries_by_path($empty_patterns), 'path')
+        );
+
+        $omitted = $this->collect_all_scan_pages($this->scanner(), 20);
+        $this->assertSame(
+            array_column($this->sort_entries_by_path($empty_patterns), 'path'),
+            array_column($this->sort_entries_by_path($omitted), 'path')
+        );
+
+        $stats = $this->scanner()->stats(array(
+            'wp-content/uploads/keep.txt',
+            'wp-content/cache/generated.txt',
+            'wp-content/debug.log',
+            'error_log',
+        ), true, array());
+        $this->assertSame(array('wp-content/uploads/keep.txt'), array_column($stats['stats'], 'path'));
+        $this->assertSame(
+            array(
+                'wp-content/cache/generated.txt',
+                'wp-content/debug.log',
+                'error_log',
+            ),
+            $stats['missing']
+        );
+    }
+
+    public function test_disable_exclusions_lifts_path_patterns_and_log_basenames(): void
+    {
+        $files = array(
+            'wp-content/uploads/keep.txt' => 'keep-me',
+            'wp-content/cache/generated.txt' => 'was-excluded-path',
+            'wp-content/updraft/old.zip' => 'was-excluded-path',
+            'error_log' => 'root-php-log',
+            'wp-content/debug.log' => 'wp-debug',
+            'wp-content/uploads/foo.log' => 'generic-log',
+            'wp-content/php_errorlog' => 'cpanel-php-log',
+        );
+        $this->create_tree($files);
+
+        $entries = $this->collect_all_scan_pages($this->scanner(), 20, false, false, null, true);
+        $this->assertSame(
+            array(
+                'error_log',
+                'wp-content/cache/generated.txt',
+                'wp-content/debug.log',
+                'wp-content/php_errorlog',
+                'wp-content/uploads/foo.log',
+                'wp-content/uploads/keep.txt',
+                'wp-content/updraft/old.zip',
+            ),
+            array_column($this->sort_entries_by_path($entries), 'path')
+        );
+
+        $stats = $this->scanner()->stats(array(
+            'wp-content/cache/generated.txt',
+            'error_log',
+            'wp-content/debug.log',
+            'wp-content/uploads/foo.log',
+            'wp-content/uploads/keep.txt',
+        ), true, array('/wp-content/cache/'), true);
+        $this->assertSame(
+            array(
+                'wp-content/cache/generated.txt',
+                'error_log',
+                'wp-content/debug.log',
+                'wp-content/uploads/foo.log',
+                'wp-content/uploads/keep.txt',
+            ),
+            array_column($stats['stats'], 'path')
+        );
+        $this->assertSame(array(), $stats['missing']);
+        $this->assertSame(array(), $stats['failed']);
+    }
+
+    public function test_list_excluded_pagination_is_complete(): void
+    {
+        $files = array();
+        for ($i = 0; $i < 18; $i++) {
+            $files[sprintf('wp-content/cache/item-%02d.txt', $i)] = 'excluded-' . $i;
+        }
+        $files['wp-content/uploads/keep.txt'] = 'keep-me';
+        $files['wp-content/debug.log'] = 'wp-debug';
+        $files['error_log'] = 'root-php-log';
+        $files['wp-content/uploads/foo.log'] = 'generic-log';
+        $this->create_tree($files);
+
+        $scanner = $this->scanner();
+        $first_page = $scanner->list_excluded('', 4, null, false);
+        $this->assertCount(4, $first_page['entries']);
+        $this->assertTrue($first_page['has_more']);
+        $this->assertNotNull($first_page['next_cursor']);
+
+        $rest = array();
+        $cursor = $first_page['next_cursor'];
+        for ($i = 0; $i < 50; $i++) {
+            $page = $scanner->list_excluded($cursor, 4, null, false);
+            foreach ($page['entries'] as $entry) {
+                $rest[] = $entry;
+            }
+            if (empty($page['has_more'])) {
+                $this->assertNull($page['next_cursor']);
+                break;
+            }
+            $cursor = $page['next_cursor'];
+        }
+
+        $combined = array_merge($first_page['entries'], $rest);
+        $paths = array_column($combined, 'path');
+        $this->assertSame(array_values(array_unique($paths)), $paths);
+
+        $replay = $this->collect_all_excluded_pages($scanner, 7);
+        $this->assertSame(
+            $this->sort_entries_by_path($combined),
+            $this->sort_entries_by_path($replay)
+        );
+
+        $expected = array(
+            'error_log',
+            'wp-content/debug.log',
+            'wp-content/uploads/foo.log',
+        );
+        for ($i = 0; $i < 18; $i++) {
+            $expected[] = sprintf('wp-content/cache/item-%02d.txt', $i);
+        }
+        sort($expected, SORT_STRING);
+        $this->assertSame($expected, array_column($this->sort_entries_by_path($combined), 'path'));
+        $this->assertNotContains('wp-content/uploads/keep.txt', $paths);
+    }
+
+    public function test_list_excluded_matched_pattern_attribution(): void
+    {
+        $files = array(
+            'wp-content/uploads/keep.txt' => 'keep-me',
+            'wp-content/cache/object/x' => 'generated-cache',
+            'wp-content/updraft/old.zip' => 'backup-plugin',
+            'wp-content/custom-skip/secret.txt' => 'platform-only',
+            'error_log' => 'root-php-log',
+            'wp-content/php_errorlog' => 'cpanel-php-log',
+            'wp-content/debug.log' => 'wp-debug',
+            'wp-content/uploads/foo.log' => 'generic-log',
+        );
+        $this->create_tree($files);
+
+        $by_path = array();
+        foreach ($this->collect_all_excluded_pages($this->scanner(), 20) as $entry) {
+            $this->assertArrayNotHasKey('sha256', $entry);
+            $this->assertArrayHasKey('matched_pattern', $entry);
+            $this->assertArrayHasKey('size', $entry);
+            $this->assertArrayHasKey('mtime', $entry);
+            $by_path[$entry['path']] = $entry['matched_pattern'];
+        }
+
+        $this->assertSame('/wp-content/cache/', $by_path['wp-content/cache/object/x']);
+        $this->assertSame('/wp-content/updraft/', $by_path['wp-content/updraft/old.zip']);
+        $this->assertSame('error_log', $by_path['error_log']);
+        $this->assertSame('php_errorlog', $by_path['wp-content/php_errorlog']);
+        $this->assertSame('debug.log', $by_path['wp-content/debug.log']);
+        $this->assertSame('*.log', $by_path['wp-content/uploads/foo.log']);
+        $this->assertArrayNotHasKey('wp-content/uploads/keep.txt', $by_path);
+        $this->assertArrayNotHasKey('wp-content/custom-skip/secret.txt', $by_path);
+
+        $platform = array('/custom-skip/', '/wp-content/');
+        $platform_by_path = array();
+        foreach ($this->collect_all_excluded_pages($this->scanner(), 20, $platform) as $entry) {
+            $platform_by_path[$entry['path']] = $entry['matched_pattern'];
+        }
+        $this->assertSame('/custom-skip/', $platform_by_path['wp-content/custom-skip/secret.txt']);
+        $this->assertSame('/wp-content/', $platform_by_path['wp-content/cache/object/x']);
+        $this->assertSame('/wp-content/', $platform_by_path['wp-content/uploads/keep.txt']);
+        $this->assertSame('error_log', $platform_by_path['error_log']);
+
+        $disabled = $this->scanner()->list_excluded('', 50, null, true);
+        $this->assertSame(array(), $disabled['entries']);
+        $this->assertFalse($disabled['has_more']);
+        $this->assertNull($disabled['next_cursor']);
+        $this->assertSame(0, $disabled['scanned']);
+    }
 }

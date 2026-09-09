@@ -117,11 +117,11 @@ class Stack2_Backup_Manager
      * @param array<int, string>|null $exclude_patterns
      * @return array{entries: array<int, array>, next_cursor: ?string, has_more: bool, scanned: int}
      */
-    public function scan_files(string $job_id, ?string $cursor, $limit, bool $include_sha256 = false, bool $include_dirs = false, ?array $exclude_patterns = null): array
+    public function scan_files(string $job_id, ?string $cursor, $limit, bool $include_sha256 = false, bool $include_dirs = false, ?array $exclude_patterns = null, bool $disable_exclusions = false): array
     {
         $this->require_job($job_id);
 
-        return $this->file_scanner->scan($cursor, $limit, $include_sha256, $include_dirs, $exclude_patterns);
+        return $this->file_scanner->scan($cursor, $limit, $include_sha256, $include_dirs, $exclude_patterns, $disable_exclusions);
     }
 
     /**
@@ -129,11 +129,22 @@ class Stack2_Backup_Manager
      * @param array<int, string>|null $exclude_patterns
      * @return array{stats: array<int, array>, missing: array<int, string>, failed: array<int, array{path: string, error: string}>}
      */
-    public function stat_files(string $job_id, array $paths, bool $include_sha256 = true, ?array $exclude_patterns = null): array
+    public function stat_files(string $job_id, array $paths, bool $include_sha256 = true, ?array $exclude_patterns = null, bool $disable_exclusions = false): array
     {
         $this->require_job($job_id);
 
-        return $this->file_scanner->stats($paths, $include_sha256, $exclude_patterns);
+        return $this->file_scanner->stats($paths, $include_sha256, $exclude_patterns, $disable_exclusions);
+    }
+
+    /**
+     * @param array<int, string>|null $exclude_patterns
+     * @return array{entries: array<int, array>, next_cursor: ?string, has_more: bool, scanned: int}
+     */
+    public function list_excluded_files(string $job_id, ?string $cursor, $limit, ?array $exclude_patterns = null, bool $disable_exclusions = false): array
+    {
+        $this->require_job($job_id);
+
+        return $this->file_scanner->list_excluded($cursor, $limit, $exclude_patterns, $disable_exclusions);
     }
 
     /**

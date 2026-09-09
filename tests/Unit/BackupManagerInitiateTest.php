@@ -55,4 +55,12 @@ class BackupManagerInitiateTest extends BackupTestCase
         $this->expectExceptionMessage('Backup job not found.');
         $manager->scan_files('missing_job', '', 10, false, false);
     }
+
+    public function test_list_excluded_requires_initiated_job(): void
+    {
+        $manager = $this->manager();
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Backup job not found.');
+        $manager->list_excluded_files('missing_job', '', 10);
+    }
 }

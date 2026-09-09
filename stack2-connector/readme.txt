@@ -4,7 +4,7 @@ Tags: stack2, automation, plugin management, backup, inventory
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 1.1.15
+Stable tag: 1.1.16
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -71,6 +71,10 @@ Automatic scheduled sync relies on WP-Cron. Manual sync is available from plugin
 Stack2 Connector is not distributed on wordpress.org. It checks GitHub Releases (https://github.com/leighharro/stack2-wp/releases/latest) for new versions and integrates with WordPress's normal plugin update UI, including the built-in "Enable auto-updates" option on the Plugins page. Downloaded packages are verified against the release's published SHA256 checksum before install. Like scheduled sync, checking for updates and background auto-updates rely on WP-Cron; a manual "Check for Updates" button is available from plugin settings.
 
 == Changelog ==
+
+= 1.1.16 =
+- HMAC-signed `GET|POST .../files/excluded` returns a complete paginated catalog of paths excluded from a backup scan (relative path, first `matched_pattern`, optional size/mtime; no SHA).
+- Explicit `disable_exclusions` boolean on initiate, scan, stats, and excluded-list. When true, path patterns and log-basename hard filters (`error_log`, `debug.log`, `*.log`) are skipped; excluded-list returns an empty catalog (HTTP 200). Empty `exclude_patterns` still means local defaults, not disable.
 
 = 1.1.15 =
 - Accept optional HMAC-signed `exclude_patterns` on agent file scan/stats. A non-empty list replaces local `EXCLUSION_PATTERNS` for that request (no merge). Absent or empty keeps local defaults (post-1.1.14: no bare `/cache/`). Log basename exclusions still apply so changing `*.log` files are not hashed.

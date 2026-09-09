@@ -97,13 +97,40 @@ abstract class BackupTestCase extends TestCase
     /**
      * @return array<int, array>
      */
-    protected function collect_all_scan_pages(Stack2_Backup_File_Scanner $scanner, int $limit = 50, bool $include_sha256 = false, bool $include_dirs = false, ?array $exclude_patterns = null): array
+    protected function collect_all_scan_pages(Stack2_Backup_File_Scanner $scanner, int $limit = 50, bool $include_sha256 = false, bool $include_dirs = false, ?array $exclude_patterns = null, bool $disable_exclusions = false): array
     {
         $entries = array();
         $cursor = '';
 
         for ($i = 0; $i < 1000; $i++) {
-            $page = $scanner->scan($cursor, $limit, $include_sha256, $include_dirs, $exclude_patterns);
+            $page = $scanner->scan($cursor, $limit, $include_sha256, $include_dirs, $exclude_patterns, $disable_exclusions);
+            $this->assertIsArray($page['entries']);
+            foreach ($page['entries'] as $entry) {
+                $entries[] = $entry;
+            }
+
+            if (empty($page['has_more'])) {
+                $this->assertNull($page['next_cursor']);
+                break;
+            }
+
+            $this->assertNotNull($page['next_cursor']);
+            $cursor = (string) $page['next_cursor'];
+        }
+
+        return $entries;
+    }
+
+    /**
+     * @return array<int, array>
+     */
+    protected function collect_all_excluded_pages(Stack2_Backup_File_Scanner $scanner, int $limit = 50, ?array $exclude_patterns = null, bool $disable_exclusions = false): array
+    {
+        $entries = array();
+        $cursor = '';
+
+        for ($i = 0; $i < 1000; $i++) {
+            $page = $scanner->list_excluded($cursor, $limit, $exclude_patterns, $disable_exclusions);
             $this->assertIsArray($page['entries']);
             foreach ($page['entries'] as $entry) {
                 $entries[] = $entry;
