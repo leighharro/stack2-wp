@@ -467,9 +467,9 @@ class BackupFileScannerTest extends BackupTestCase
                 'wp-content/cache/generated.txt',
                 'wp-content/debug.log',
                 'wp-content/php_errorlog',
+                'wp-content/updraft/old.zip',
                 'wp-content/uploads/foo.log',
                 'wp-content/uploads/keep.txt',
-                'wp-content/updraft/old.zip',
             ),
             array_column($this->sort_entries_by_path($entries), 'path')
         );
