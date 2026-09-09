@@ -365,4 +365,255 @@ class BackupApiAgentInventoryTest extends BackupTestCase
             array_column($this->sort_entries_by_path($response->get_data()['entries']), 'path')
         );
     }
+
+    public function test_empty_exclude_patterns_body_is_not_disable(): void
+    {
+        $this->create_tree(array(
+            'wp-content/uploads/keep.txt' => 'keep-me',
+            'wp-content/cache/generated.txt' => 'local-default',
+            'wp-content/debug.log' => 'wp-debug',
+        ));
+
+        $manager = $this->manager();
+        $manager->prepare_backup('b9', true, false, gmdate('c'), 'job_empty_patterns');
+        $api = $this->api($manager);
+
+        $body = wp_json_encode(array('exclude_patterns' => array()));
+        $request = new WP_REST_Request();
+        $request->set_method('POST');
+        $this->sign_request($request, 'POST', '/wp-json/stack2/v1/backups/job_empty_patterns/files/scan', $body);
+        $request->set_param('job_id', 'job_empty_patterns');
+        $request->set_param('limit', 50);
+
+        $response = $api->scan_files($request);
+        $this->assertSame(200, $response->get_status());
+        $this->assertSame(
+            array('wp-content/uploads/keep.txt'),
+            array_column($this->sort_entries_by_path($response->get_data()['entries']), 'path')
+        );
+
+        $stats_body = wp_json_encode(array(
+            'paths' => array(
+                'wp-content/uploads/keep.txt',
+                'wp-content/cache/generated.txt',
+                'wp-content/debug.log',
+            ),
+            'exclude_patterns' => array(),
+        ));
+        $stats = new WP_REST_Request();
+        $stats->set_method('POST');
+        $this->sign_request($stats, 'POST', '/wp-json/stack2/v1/backups/job_empty_patterns/files/stats', $stats_body);
+        $stats->set_param('job_id', 'job_empty_patterns');
+
+        $stats_response = $api->stat_files($stats);
+        $this->assertSame(200, $stats_response->get_status());
+        $this->assertSame(array('wp-content/uploads/keep.txt'), array_column($stats_response->get_data()['stats'], 'path'));
+        $this->assertSame(
+            array('wp-content/cache/generated.txt', 'wp-content/debug.log'),
+            $stats_response->get_data()['missing']
+        );
+    }
+
+    public function test_disable_exclusions_on_scan_and_stats_lifts_path_and_logs(): void
+    {
+        $this->create_tree(array(
+            'wp-content/uploads/keep.txt' => 'keep-me',
+            'wp-content/cache/generated.txt' => 'was-excluded',
+            'error_log' => 'root-php-log',
+            'wp-content/debug.log' => 'wp-debug',
+            'wp-content/uploads/foo.log' => 'generic-log',
+        ));
+
+        $manager = $this->manager();
+        $manager->prepare_backup('b10', true, false, gmdate('c'), 'job_disable');
+        $api = $this->api($manager);
+
+        $body = wp_json_encode(array(
+            'disable_exclusions' => true,
+            'exclude_patterns' => array('/wp-content/cache/'),
+        ));
+        $scan = new WP_REST_Request();
+        $scan->set_method('POST');
+        $this->sign_request($scan, 'POST', '/wp-json/stack2/v1/backups/job_disable/files/scan', $body);
+        $scan->set_param('job_id', 'job_disable');
+        $scan->set_param('limit', 50);
+
+        $scan_response = $api->scan_files($scan);
+        $this->assertSame(200, $scan_response->get_status());
+        $this->assertSame(
+            array(
+                'error_log',
+                'wp-content/cache/generated.txt',
+                'wp-content/debug.log',
+                'wp-content/uploads/foo.log',
+                'wp-content/uploads/keep.txt',
+            ),
+            array_column($this->sort_entries_by_path($scan_response->get_data()['entries']), 'path')
+        );
+
+        $stats_body = wp_json_encode(array(
+            'paths' => array(
+                'wp-content/cache/generated.txt',
+                'error_log',
+                'wp-content/debug.log',
+                'wp-content/uploads/foo.log',
+            ),
+            'include_sha256' => true,
+            'disable_exclusions' => true,
+        ));
+        $stats = new WP_REST_Request();
+        $stats->set_method('POST');
+        $this->sign_request($stats, 'POST', '/wp-json/stack2/v1/backups/job_disable/files/stats', $stats_body);
+        $stats->set_param('job_id', 'job_disable');
+
+        $stats_response = $api->stat_files($stats);
+        $this->assertSame(200, $stats_response->get_status());
+        $this->assertSame(
+            array(
+                'wp-content/cache/generated.txt',
+                'error_log',
+                'wp-content/debug.log',
+                'wp-content/uploads/foo.log',
+            ),
+            array_column($stats_response->get_data()['stats'], 'path')
+        );
+        $this->assertSame(array(), $stats_response->get_data()['missing']);
+    }
+
+    public function test_excluded_list_pages_complete_catalog_with_hmac(): void
+    {
+        $files = array(
+            'wp-content/uploads/keep.txt' => 'keep-me',
+            'wp-content/cache/a.txt' => 'cache-a',
+            'wp-content/cache/b.txt' => 'cache-b',
+            'wp-content/cache/c.txt' => 'cache-c',
+            'wp-content/debug.log' => 'wp-debug',
+            'error_log' => 'root-php-log',
+        );
+        $this->create_tree($files);
+
+        $manager = $this->manager();
+        $manager->prepare_backup('b11', true, false, gmdate('c'), 'job_excluded');
+        $api = $this->api($manager);
+
+        $collected = array();
+        $cursor = '';
+        for ($i = 0; $i < 20; $i++) {
+            $body = wp_json_encode(array(
+                'cursor' => $cursor,
+                'limit' => 2,
+            ));
+            $request = new WP_REST_Request();
+            $request->set_method('POST');
+            $this->sign_request($request, 'POST', '/wp-json/stack2/v1/backups/job_excluded/files/excluded', $body);
+            $request->set_param('job_id', 'job_excluded');
+
+            $response = $api->list_excluded_files($request);
+            $this->assertSame(200, $response->get_status());
+            $payload = $response->get_data();
+            $this->assertTrue($payload['success']);
+            $this->assertSame('job_excluded', $payload['job_id']);
+            foreach ($payload['entries'] as $entry) {
+                $this->assertArrayNotHasKey('sha256', $entry);
+                $this->assertArrayHasKey('matched_pattern', $entry);
+                $collected[] = $entry;
+            }
+
+            if (empty($payload['has_more'])) {
+                $this->assertNull($payload['next_cursor']);
+                break;
+            }
+
+            $cursor = (string) $payload['next_cursor'];
+        }
+
+        $by_path = array();
+        foreach ($this->sort_entries_by_path($collected) as $entry) {
+            $by_path[$entry['path']] = $entry['matched_pattern'];
+        }
+        $this->assertSame(
+            array(
+                'error_log' => 'error_log',
+                'wp-content/cache/a.txt' => '/wp-content/cache/',
+                'wp-content/cache/b.txt' => '/wp-content/cache/',
+                'wp-content/cache/c.txt' => '/wp-content/cache/',
+                'wp-content/debug.log' => 'debug.log',
+            ),
+            $by_path
+        );
+    }
+
+    public function test_excluded_list_disable_exclusions_returns_empty_catalog(): void
+    {
+        $this->create_tree(array(
+            'wp-content/cache/generated.txt' => 'cache',
+            'wp-content/debug.log' => 'wp-debug',
+        ));
+
+        $manager = $this->manager();
+        $manager->prepare_backup('b12', true, false, gmdate('c'), 'job_excluded_off');
+        $api = $this->api($manager);
+
+        $body = wp_json_encode(array('disable_exclusions' => true));
+        $request = new WP_REST_Request();
+        $request->set_method('POST');
+        $this->sign_request($request, 'POST', '/wp-json/stack2/v1/backups/job_excluded_off/files/excluded', $body);
+        $request->set_param('job_id', 'job_excluded_off');
+        $request->set_param('limit', 50);
+
+        $response = $api->list_excluded_files($request);
+        $this->assertSame(200, $response->get_status());
+        $data = $response->get_data();
+        $this->assertTrue($data['success']);
+        $this->assertSame(array(), $data['entries']);
+        $this->assertFalse($data['has_more']);
+        $this->assertNull($data['next_cursor']);
+    }
+
+    public function test_excluded_list_rejects_bad_hmac_and_unknown_job(): void
+    {
+        $manager = $this->manager();
+        $manager->prepare_backup('b13', true, false, gmdate('c'), 'job_excluded_auth');
+        $api = $this->api($manager);
+
+        $bad = new WP_REST_Request();
+        $bad->set_header('x-stack2-site-id', 'site_test');
+        $bad->set_header('x-stack2-timestamp', (string) time());
+        $bad->set_header('x-stack2-signature', str_repeat('d', 64));
+        $bad->set_route('/wp-json/stack2/v1/backups/job_excluded_auth/files/excluded');
+        $bad->set_param('job_id', 'job_excluded_auth');
+
+        $denied = $api->list_excluded_files($bad);
+        $this->assertSame(401, $denied->get_status());
+        $this->assertFalse($denied->get_data()['success']);
+
+        $missing = new WP_REST_Request();
+        $this->sign_request($missing, 'GET', '/wp-json/stack2/v1/backups/missing_job/files/excluded', '');
+        $missing->set_param('job_id', 'missing_job');
+
+        $response = $api->list_excluded_files($missing);
+        $this->assertSame(404, $response->get_status());
+        $this->assertFalse($response->get_data()['success']);
+    }
+
+    public function test_initiate_echoes_disable_exclusions_and_excluded_limits(): void
+    {
+        $api = $this->api($this->manager());
+        $body = wp_json_encode(array(
+            'job_id' => 'backup_disable_init',
+            'include_files' => true,
+            'include_database' => false,
+            'disable_exclusions' => true,
+        ));
+
+        $request = new WP_REST_Request();
+        $this->sign_request($request, 'POST', '/wp-json/stack2/v1/backups/initiate', $body);
+
+        $response = $api->initiate_backup($request);
+        $this->assertSame(200, $response->get_status());
+        $data = $response->get_data();
+        $this->assertTrue($data['disable_exclusions']);
+        $this->assertSame(500, $data['excluded']['default_limit']);
+        $this->assertSame(2000, $data['excluded']['max_limit']);
+    }
 }

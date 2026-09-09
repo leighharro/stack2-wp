@@ -189,13 +189,25 @@ class Stack2_Backup_Compressor
     /**
      * @param array<int, string>|null $exclusion_patterns Non-empty Platform list, or null/empty for local defaults.
      */
-    public function is_excluded(string $path, bool $is_directory = false, ?array $exclusion_patterns = null): bool
+    public function is_excluded(string $path, bool $is_directory = false, ?array $exclusion_patterns = null, bool $disable_exclusions = false): bool
     {
-        $normalized = wp_normalize_path($path);
-        if (!$is_directory && $this->is_excluded_log_basename(basename($normalized))) {
-            return true;
+        return $this->exclusion_match($path, $is_directory, $exclusion_patterns, $disable_exclusions) !== null;
+    }
+
+    /**
+     * First matching exclusion reason, or null if the path is included.
+     * Path patterns are checked in list order; log basename rules are last.
+     * Empty $exclusion_patterns falls back to local defaults (does not disable).
+     *
+     * @param array<int, string>|null $exclusion_patterns Non-empty Platform list, or null/empty for local defaults.
+     */
+    public function exclusion_match(string $path, bool $is_directory = false, ?array $exclusion_patterns = null, bool $disable_exclusions = false): ?string
+    {
+        if ($disable_exclusions) {
+            return null;
         }
 
+        $normalized = wp_normalize_path($path);
         if ($is_directory) {
             $normalized = trailingslashit($normalized);
         }
@@ -209,11 +221,15 @@ class Stack2_Backup_Compressor
                 continue;
             }
             if (strpos($normalized, $pattern) !== false) {
-                return true;
+                return $pattern;
             }
         }
 
-        return false;
+        if (!$is_directory) {
+            return $this->excluded_log_basename_pattern(basename($normalized));
+        }
+
+        return null;
     }
 
     public function checksum_for_path(string $absolute_path): string
@@ -305,14 +321,23 @@ class Stack2_Backup_Compressor
      * Matches error_log, php_errorlog, debug.log, and any *.log basename.
      * Does not match names such as error_log.bak or something.log.bak.
      */
-    private function is_excluded_log_basename(string $basename): bool
+    private function excluded_log_basename_pattern(string $basename): ?string
     {
         $name = strtolower($basename);
-        if ($name === 'error_log' || $name === 'php_errorlog' || $name === 'debug.log') {
-            return true;
+        if ($name === 'error_log') {
+            return 'error_log';
+        }
+        if ($name === 'php_errorlog') {
+            return 'php_errorlog';
+        }
+        if ($name === 'debug.log') {
+            return 'debug.log';
+        }
+        if (str_ends_with($name, '.log')) {
+            return '*.log';
         }
 
-        return str_ends_with($name, '.log');
+        return null;
     }
 
     private function build_file_metadata(string $absolute_path): ?array

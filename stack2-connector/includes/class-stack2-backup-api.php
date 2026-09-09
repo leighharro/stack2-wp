@@ -45,6 +45,8 @@ class Stack2_Backup_API
         $this->register_scan_route('/backup/(?P<job_id>[A-Za-z0-9_-]+)/files/scan');
         $this->register_stats_route('/backups/(?P<job_id>[A-Za-z0-9_-]+)/files/stats');
         $this->register_stats_route('/backup/(?P<job_id>[A-Za-z0-9_-]+)/files/stats');
+        $this->register_excluded_route('/backups/(?P<job_id>[A-Za-z0-9_-]+)/files/excluded');
+        $this->register_excluded_route('/backup/(?P<job_id>[A-Za-z0-9_-]+)/files/excluded');
 
         register_rest_route('stack2/v1', '/backups/(?P<job_id>[A-Za-z0-9_-]+)/status', array(
             'methods' => WP_REST_Server::READABLE,
@@ -76,7 +78,7 @@ class Stack2_Backup_API
             'permission_callback' => '__return_true',
         ));
 
-        register_rest_route('stack2/v1', '/backups/(?P<job_id>[A-Za-z0-9_-]+)/files/(?P<encoded_path>(?!scan$|stats$)[A-Za-z0-9_-]+)', array(
+        register_rest_route('stack2/v1', '/backups/(?P<job_id>[A-Za-z0-9_-]+)/files/(?P<encoded_path>(?!scan$|stats$|excluded$)[A-Za-z0-9_-]+)', array(
             'methods' => WP_REST_Server::READABLE,
             'callback' => array($this, 'download_manifest_file'),
             'permission_callback' => '__return_true',
@@ -100,7 +102,7 @@ class Stack2_Backup_API
             'permission_callback' => '__return_true',
         ));
 
-        register_rest_route('stack2/v1', '/backup/(?P<job_id>[A-Za-z0-9_-]+)/files/(?P<encoded_path>(?!scan$|stats$)[A-Za-z0-9_-]+)', array(
+        register_rest_route('stack2/v1', '/backup/(?P<job_id>[A-Za-z0-9_-]+)/files/(?P<encoded_path>(?!scan$|stats$|excluded$)[A-Za-z0-9_-]+)', array(
             'methods' => WP_REST_Server::READABLE,
             'callback' => array($this, 'download_manifest_file'),
             'permission_callback' => '__return_true',
@@ -168,6 +170,7 @@ class Stack2_Backup_API
         $include_files = isset($payload['include_files']) ? (bool) $payload['include_files'] : false;
         $include_database = isset($payload['include_database']) ? (bool) $payload['include_database'] : false;
         $requested_at = isset($payload['timestamp']) ? sanitize_text_field((string) $payload['timestamp']) : gmdate('c');
+        $disable_exclusions = $this->request_bool($payload['disable_exclusions'] ?? false, false);
 
         try {
             $prepared = $this->backup_manager->prepare_backup($backup_id, $include_files, $include_database, $requested_at, $job_id);
@@ -206,6 +209,13 @@ class Stack2_Backup_API
             ? $prepared['inventory_limits']
             : Stack2_Backup_File_Scanner::inventory_limits();
 
+        $excluded_limits = is_array($limits['excluded'] ?? null)
+            ? $limits['excluded']
+            : array(
+                'default_limit' => Stack2_Backup_File_Scanner::DEFAULT_SCAN_LIMIT,
+                'max_limit' => Stack2_Backup_File_Scanner::MAX_SCAN_LIMIT,
+            );
+
         return new WP_REST_Response(array(
             'success' => true,
             'error' => null,
@@ -213,8 +223,10 @@ class Stack2_Backup_API
             'job_id' => $prepared['job_id'],
             'status' => 'initiated',
             'manifest_mode' => 'agent',
+            'disable_exclusions' => $disable_exclusions,
             'scan' => $limits['scan'],
             'stats' => $limits['stats'],
+            'excluded' => $excluded_limits,
             'manifest' => $manifest,
         ), 200);
     }
@@ -242,6 +254,7 @@ class Stack2_Backup_API
         $include_dirs = $this->request_bool($request->get_param('include_dirs'), false);
         $body_payload = json_decode($raw_body, true);
         $exclude_patterns = $this->exclude_patterns_from_request($request, is_array($body_payload) ? $body_payload : null);
+        $disable_exclusions = $this->disable_exclusions_from_request($request, is_array($body_payload) ? $body_payload : null);
 
         if (is_array($body_payload)) {
             if (isset($body_payload['cursor'])) {
@@ -263,7 +276,7 @@ class Stack2_Backup_API
         }
 
         try {
-            $page = $this->backup_manager->scan_files($job_id, $cursor, $limit, $include_sha256, $include_dirs, $exclude_patterns);
+            $page = $this->backup_manager->scan_files($job_id, $cursor, $limit, $include_sha256, $include_dirs, $exclude_patterns, $disable_exclusions);
         } catch (InvalidArgumentException $e) {
             return new WP_REST_Response(array(
                 'success' => false,
@@ -343,9 +356,10 @@ class Stack2_Backup_API
 
         $include_sha256 = $this->request_bool($payload['include_sha256'] ?? true, true);
         $exclude_patterns = $this->exclude_patterns_from_request($request, $payload);
+        $disable_exclusions = $this->disable_exclusions_from_request($request, $payload);
 
         try {
-            $result = $this->backup_manager->stat_files($job_id, $payload['paths'], $include_sha256, $exclude_patterns);
+            $result = $this->backup_manager->stat_files($job_id, $payload['paths'], $include_sha256, $exclude_patterns, $disable_exclusions);
         } catch (InvalidArgumentException $e) {
             return new WP_REST_Response(array(
                 'success' => false,
@@ -377,6 +391,80 @@ class Stack2_Backup_API
             'stats' => $result['stats'],
             'missing' => $result['missing'],
             'failed' => $result['failed'],
+        ), 200);
+    }
+
+    public function list_excluded_files(WP_REST_Request $request): WP_REST_Response
+    {
+        if ($this->site_id === '' || $this->api_key === '') {
+            return new WP_REST_Response(array(
+                'success' => false,
+                'error' => 'Stack2 credentials are not configured.',
+            ), 503);
+        }
+
+        $path = $this->get_signed_path($request);
+        $raw_body = (string) $request->get_body();
+        $auth = $this->verify($request, $this->request_http_method($request), $path, $raw_body);
+        if (is_wp_error($auth)) {
+            return $this->error_response_from_wp_error($auth);
+        }
+
+        $job_id = sanitize_text_field((string) $request->get_param('job_id'));
+        $cursor = (string) ($request->get_param('cursor') ?? '');
+        $limit = (int) ($request->get_param('limit') ?? Stack2_Backup_File_Scanner::DEFAULT_SCAN_LIMIT);
+        $body_payload = json_decode($raw_body, true);
+        $exclude_patterns = $this->exclude_patterns_from_request($request, is_array($body_payload) ? $body_payload : null);
+        $disable_exclusions = $this->disable_exclusions_from_request($request, is_array($body_payload) ? $body_payload : null);
+
+        if (is_array($body_payload)) {
+            if (isset($body_payload['cursor'])) {
+                $cursor = (string) $body_payload['cursor'];
+            }
+            if (isset($body_payload['limit'])) {
+                $limit = (int) $body_payload['limit'];
+            }
+        }
+
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(30);
+        }
+
+        try {
+            $page = $this->backup_manager->list_excluded_files($job_id, $cursor, $limit, $exclude_patterns, $disable_exclusions);
+        } catch (InvalidArgumentException $e) {
+            return new WP_REST_Response(array(
+                'success' => false,
+                'error' => $e->getMessage(),
+                'job_id' => $job_id,
+            ), 400);
+        } catch (RuntimeException $e) {
+            $not_found = $e->getMessage() === 'Backup job not found.';
+            return new WP_REST_Response(array(
+                'success' => false,
+                'error' => $e->getMessage(),
+                'job_id' => $job_id,
+            ), $not_found ? 404 : 500);
+        } catch (Throwable $e) {
+            $this->logger->error('Backup excluded-file list failed.', array(
+                'job_id' => $job_id,
+                'error' => $e->getMessage(),
+            ));
+
+            return new WP_REST_Response(array(
+                'success' => false,
+                'error' => 'Server error',
+                'job_id' => $job_id,
+            ), 500);
+        }
+
+        return new WP_REST_Response(array(
+            'success' => true,
+            'job_id' => $job_id,
+            'entries' => $page['entries'],
+            'next_cursor' => $page['next_cursor'],
+            'has_more' => $page['has_more'],
+            'scanned' => $page['scanned'],
         ), 200);
     }
 
@@ -630,6 +718,7 @@ class Stack2_Backup_API
     /**
      * Prefer HMAC-signed JSON body exclude_patterns over unsigned query.
      * Absent, empty, or non-list values fall back to local EXCLUSION_PATTERNS.
+     * An empty list is not disable_exclusions.
      *
      * @param array<string, mixed>|null $payload
      * @return array<int, string>|null
@@ -646,6 +735,47 @@ class Stack2_Backup_API
         }
 
         return null;
+    }
+
+    /**
+     * Explicit boolean only. Empty exclude_patterns must not be treated as disable.
+     * Prefer HMAC-signed JSON body over unsigned query.
+     *
+     * @param array<string, mixed>|null $payload
+     */
+    private function disable_exclusions_from_request(WP_REST_Request $request, $payload = null): bool
+    {
+        if (is_array($payload) && array_key_exists('disable_exclusions', $payload)) {
+            return $this->request_bool($payload['disable_exclusions'], false);
+        }
+
+        $query = $request->get_param('disable_exclusions');
+        if ($query !== null && $query !== '') {
+            return $this->request_bool($query, false);
+        }
+
+        return false;
+    }
+
+    private function register_excluded_route(string $route): void
+    {
+        register_rest_route('stack2/v1', $route, array(
+            'methods' => array(WP_REST_Server::READABLE, WP_REST_Server::CREATABLE),
+            'callback' => array($this, 'list_excluded_files'),
+            'permission_callback' => '__return_true',
+            'args' => array(
+                'cursor' => array(
+                    'type' => 'string',
+                    'required' => false,
+                    'default' => '',
+                ),
+                'limit' => array(
+                    'type' => 'integer',
+                    'required' => false,
+                    'default' => Stack2_Backup_File_Scanner::DEFAULT_SCAN_LIMIT,
+                ),
+            ),
+        ));
     }
 
     private function request_http_method(WP_REST_Request $request): string

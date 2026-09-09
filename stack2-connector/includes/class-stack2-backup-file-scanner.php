@@ -46,6 +46,10 @@ class Stack2_Backup_File_Scanner
                 'default_batch' => self::DEFAULT_STATS_BATCH,
                 'max_batch' => self::MAX_STATS_BATCH,
             ),
+            'excluded' => array(
+                'default_limit' => self::DEFAULT_SCAN_LIMIT,
+                'max_limit' => self::MAX_SCAN_LIMIT,
+            ),
         );
     }
 
@@ -67,7 +71,7 @@ class Stack2_Backup_File_Scanner
      * @param array<int, string>|null $exclude_patterns Platform list for this request, or null for local defaults.
      * @return array{entries: array<int, array>, next_cursor: ?string, has_more: bool, scanned: int}
      */
-    public function scan(?string $cursor, $limit, bool $include_sha256 = false, bool $include_dirs = false, ?array $exclude_patterns = null): array
+    public function scan(?string $cursor, $limit, bool $include_sha256 = false, bool $include_dirs = false, ?array $exclude_patterns = null, bool $disable_exclusions = false): array
     {
         $limit = self::normalize_scan_limit($limit);
         $stack = $this->decode_cursor($cursor);
@@ -114,7 +118,7 @@ class Stack2_Backup_File_Scanner
                 $scanned++;
 
                 if (is_dir($absolute) && !is_link($absolute)) {
-                    if ($this->compressor->is_excluded($absolute, true, $exclude_patterns)) {
+                    if ($this->compressor->is_excluded($absolute, true, $exclude_patterns, $disable_exclusions)) {
                         continue;
                     }
 
@@ -136,7 +140,7 @@ class Stack2_Backup_File_Scanner
                     continue;
                 }
 
-                if ($this->compressor->is_excluded($absolute, false, $exclude_patterns)) {
+                if ($this->compressor->is_excluded($absolute, false, $exclude_patterns, $disable_exclusions)) {
                     continue;
                 }
 
@@ -162,7 +166,7 @@ class Stack2_Backup_File_Scanner
      * @param array<int, string>|null $exclude_patterns Platform list for this request, or null for local defaults.
      * @return array{stats: array<int, array>, missing: array<int, string>, failed: array<int, array{path: string, error: string}>}
      */
-    public function stats(array $paths, bool $include_sha256 = true, ?array $exclude_patterns = null): array
+    public function stats(array $paths, bool $include_sha256 = true, ?array $exclude_patterns = null, bool $disable_exclusions = false): array
     {
         if (count($paths) > self::MAX_STATS_BATCH) {
             throw new InvalidArgumentException(
@@ -203,7 +207,7 @@ class Stack2_Backup_File_Scanner
                 continue;
             }
 
-            if ($this->compressor->is_excluded($absolute, is_dir($absolute), $exclude_patterns)) {
+            if ($this->compressor->is_excluded($absolute, is_dir($absolute), $exclude_patterns, $disable_exclusions)) {
                 $missing[] = $relative;
                 continue;
             }
@@ -264,6 +268,101 @@ class Stack2_Backup_File_Scanner
             'stats' => $stats,
             'missing' => $missing,
             'failed' => $failed,
+        );
+    }
+
+    /**
+     * Complete catalog of paths excluded from a backup scan of ABSPATH.
+     * Walks into excluded directories so every matching file is listed.
+     * Pagination uses the same DFS cursor as scan(); pages together are complete.
+     *
+     * @param array<int, string>|null $exclude_patterns Platform list for this request, or null for local defaults.
+     * @return array{entries: array<int, array>, next_cursor: ?string, has_more: bool, scanned: int}
+     */
+    public function list_excluded(?string $cursor, $limit, ?array $exclude_patterns = null, bool $disable_exclusions = false): array
+    {
+        $limit = self::normalize_scan_limit($limit);
+
+        if ($disable_exclusions) {
+            return array(
+                'entries' => array(),
+                'next_cursor' => null,
+                'has_more' => false,
+                'scanned' => 0,
+            );
+        }
+
+        $stack = $this->decode_cursor($cursor);
+        $entries = array();
+        $scanned = 0;
+        $deadline = microtime(true) + $this->time_budget_seconds;
+        $root = $this->root();
+
+        if (!is_dir($root)) {
+            return array(
+                'entries' => array(),
+                'next_cursor' => null,
+                'has_more' => false,
+                'scanned' => 0,
+            );
+        }
+
+        while ($stack !== array()) {
+            if (count($entries) >= $limit || microtime(true) >= $deadline) {
+                break;
+            }
+
+            $frame = array_pop($stack);
+            $rel_dir = (string) ($frame['p'] ?? '');
+            $index = (int) ($frame['i'] ?? 0);
+            $abs_dir = $rel_dir === '' ? $root : $root . $rel_dir;
+
+            if (!is_dir($abs_dir) || is_link($abs_dir)) {
+                continue;
+            }
+
+            $children = $this->list_children($abs_dir);
+            $total = count($children);
+
+            for ($i = $index; $i < $total; $i++) {
+                if (count($entries) >= $limit || microtime(true) >= $deadline) {
+                    $stack[] = array('p' => $rel_dir, 'i' => $i);
+                    break 2;
+                }
+
+                $name = $children[$i];
+                $relative = $rel_dir === '' ? $name : $rel_dir . '/' . $name;
+                $absolute = $root . $relative;
+                $scanned++;
+
+                if (is_dir($absolute) && !is_link($absolute)) {
+                    if ($i + 1 < $total) {
+                        $stack[] = array('p' => $rel_dir, 'i' => $i + 1);
+                    }
+                    $stack[] = array('p' => $relative, 'i' => 0);
+                    continue 2;
+                }
+
+                if (!is_file($absolute)) {
+                    continue;
+                }
+
+                $matched = $this->compressor->exclusion_match($absolute, false, $exclude_patterns, false);
+                if ($matched === null) {
+                    continue;
+                }
+
+                $entries[] = $this->excluded_file_entry($relative, $absolute, $matched);
+            }
+        }
+
+        $has_more = $stack !== array();
+
+        return array(
+            'entries' => $entries,
+            'next_cursor' => $has_more ? $this->encode_cursor($stack) : null,
+            'has_more' => $has_more,
+            'scanned' => $scanned,
         );
     }
 
@@ -355,6 +454,29 @@ class Stack2_Backup_File_Scanner
                 return null;
             }
             $entry['sha256'] = strtolower($sha256);
+        }
+
+        return $entry;
+    }
+
+    /**
+     * @return array{path: string, matched_pattern: string, size?: int, mtime?: int}
+     */
+    private function excluded_file_entry(string $relative, string $absolute, string $matched_pattern): array
+    {
+        $entry = array(
+            'path' => $relative,
+            'matched_pattern' => $matched_pattern,
+        );
+
+        $size = @filesize($absolute);
+        if ($size !== false) {
+            $entry['size'] = (int) $size;
+        }
+
+        $mtime = @filemtime($absolute);
+        if ($mtime !== false) {
+            $entry['mtime'] = (int) $mtime;
         }
 
         return $entry;

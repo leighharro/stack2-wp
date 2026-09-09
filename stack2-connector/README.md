@@ -9,6 +9,7 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
 - Backup initiation endpoint: `POST /wp-json/stack2/v1/backups/initiate` (small agent-mode envelope; no inline file list)
 - Backup file scan: `GET|POST /wp-json/stack2/v1/backups/{job_id}/files/scan?cursor=&limit=`
 - Backup file stats: `POST /wp-json/stack2/v1/backups/{job_id}/files/stats`
+- Backup excluded-file catalog: `GET|POST /wp-json/stack2/v1/backups/{job_id}/files/excluded?cursor=&limit=`
 - Force Connector update check: HMAC command `check_updates`
 - Backup status endpoint: deprecated in stateless mode
 - Backup database table download endpoint: `GET /wp-json/stack2/v1/backups/{job_id}/database/table/{base64url_table_name}`
@@ -94,6 +95,7 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
 - `include_files` (bool, required as part of include selection)
 - `include_database` (bool, required as part of include selection)
 - `timestamp` (string, optional)
+- `disable_exclusions` (bool, optional, default `false`): explicit only. Echoed on the initiate response. Initiate does not walk files; send the same flag on scan/stats/excluded. **Empty `exclude_patterns` is not disable.**
 
 If `job_id` is provided and matches `[A-Za-z0-9_-]` (max 128 chars), the plugin reuses it. Otherwise it generates a new value like `backup_<id>_<unix>`.
 
@@ -106,17 +108,28 @@ The initiate response is a small JSON envelope. `manifest.files` is always an em
 - Each `entries[]` item is `{path, size, mtime}` plus optional `sha256` when `include_sha256=true`.
 - `cursor` is an opaque base64url JSON DFS stack. Omit/empty starts at ABSPATH. Resume with `next_cursor` while `has_more` is true.
 - Prefer leaving `include_sha256` false and hashing via stats batches.
-- Optional `exclude_patterns` (array of strings): when present and non-empty, **replaces** local `EXCLUSION_PATTERNS` for that request (no merge). Absent or empty falls back to local defaults (no bare `/cache/`). Log basename exclusions (`error_log`, `php_errorlog`, `debug.log`, `*.log`) still apply.
+- Optional `exclude_patterns` (array of strings): when present and non-empty, **replaces** local `EXCLUSION_PATTERNS` for that request (no merge). Absent or empty falls back to local defaults (no bare `/cache/`). Log basename exclusions (`error_log`, `php_errorlog`, `debug.log`, `*.log`) still apply unless `disable_exclusions` is true.
+- Optional `disable_exclusions` (bool, default `false`): when `true`, skip path patterns **and** the log-basename hard filter. Empty `exclude_patterns` must **not** be treated as disable (that still uses local defaults).
 
 `POST /wp-json/stack2/v1/backups/{job_id}/files/stats`
 
-- HMAC-signed POST. Body: `{ "paths": ["..."], "include_sha256": true, "exclude_patterns": ["/wp-content/cache/"] }`.
+- HMAC-signed POST. Body: `{ "paths": ["..."], "include_sha256": true, "exclude_patterns": ["/wp-content/cache/"], "disable_exclusions": false }`.
 - Maximum 200 paths per request. Over that limit returns HTTP `400`.
 - Response: `{ success, stats: [{path, size, mtime, sha256?}], missing: [], failed: [{path, error}] }`.
 - Uses the mtime-keyed `stack2_cksum_*` checksum cache.
-- `exclude_patterns` follows the same replace-or-fallback rules as scan. Unknown JSON keys are ignored.
+- `exclude_patterns` and `disable_exclusions` follow the same rules as scan. Unknown JSON keys are ignored.
 
-Initiate advertises the same limits as `scan.default_limit` / `scan.max_limit` and `stats.default_batch` / `stats.max_batch`. Singular aliases (`/backup/...`) remain registered.
+`GET|POST /wp-json/stack2/v1/backups/{job_id}/files/excluded?cursor=&limit=`
+
+- HMAC-signed. Same cursor/limit contract as scan (default 500, hard max 2000). Successful pages always return HTTP `200`.
+- Prefer a JSON body so `exclude_patterns` / `disable_exclusions` are covered by the HMAC body hash.
+- Walks the backup scan root (`ABSPATH`) and returns **every** file that matches the effective exclusions, including files inside excluded directories. Pages together are a complete catalog (no SHA; do not OOM a huge tree — resume with `next_cursor`).
+- Body (optional): `{ "cursor": "", "limit": 500, "exclude_patterns": ["/wp-content/cache/"], "disable_exclusions": false }`.
+- Each `entries[]` item: `{ "path": "wp-content/cache/object/x", "matched_pattern": "/wp-content/cache/", "size": 12, "mtime": 1710000000 }`. `size` and `mtime` are omitted when metadata cannot be read. `matched_pattern` is the first matching path pattern (list order), or a log-basename rule (`error_log`, `php_errorlog`, `debug.log`, `*.log`) when no path pattern matches.
+- `exclude_patterns` follows the same replace-or-fallback rules as scan/stats (Platform SoR). Non-empty list replaces local defaults; omitted/empty without `disable_exclusions` uses local defaults.
+- When `disable_exclusions` is `true`, return HTTP `200` with `entries: []`, `has_more: false`, `next_cursor: null` so Platform can store an empty catalog.
+
+Initiate advertises the same limits as `scan.default_limit` / `scan.max_limit`, `stats.default_batch` / `stats.max_batch`, and `excluded.default_limit` / `excluded.max_limit`. The initiate envelope also echoes `disable_exclusions`. Singular aliases (`/backup/...`) remain registered.
 
 The previous paged `GET .../manifest` build (WP-Cron, NDJSON ledger, HTTP 202) has been removed.
 
@@ -165,8 +178,8 @@ Platform can force WordPress to refresh the Connector update cache immediately a
 - Action: `check_updates` (HMAC-signed like every other `/command`)
 - Body: `{ "action": "check_updates" }`
 - Clears `stack2_connector_update_cache` and the `update_plugins` site transient, then calls `wp_update_plugins()`
-- On success: HTTP 200, `{ "success": true, "error": null, "inventory": null, "status": "up_to_date"|"update_available", "installed_version": "1.1.15", "available_version": "1.1.15" }`
-- On GitHub/update-API failure: HTTP 502, `{ "success": false, "error": "...", "inventory": null, "status": "check_failed", "installed_version": "1.1.15", "available_version": null }`
+- On success: HTTP 200, `{ "success": true, "error": null, "inventory": null, "status": "up_to_date"|"update_available", "installed_version": "1.1.16", "available_version": "1.1.16" }`
+- On GitHub/update-API failure: HTTP 502, `{ "success": false, "error": "...", "inventory": null, "status": "check_failed", "installed_version": "1.1.16", "available_version": null }`
 - Site must be connected (empty credentials still return HTTP 503)
 
 ## Command Response Shape
