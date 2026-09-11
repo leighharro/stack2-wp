@@ -99,7 +99,9 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
 
 If `job_id` is provided and matches `[A-Za-z0-9_-]` (max 128 chars), the plugin reuses it. Otherwise it generates a new value like `backup_<id>_<unix>`.
 
-The initiate response is a small JSON envelope. `manifest.files` is always an empty array. `manifest_mode` is `"agent"`. File inventory is Platform-driven:
+The initiate response is a small JSON envelope. `manifest.files` is always an empty array. `manifest_mode` is `"agent"`. File inventory is Platform-driven.
+
+`manifest.source_paths` is a unique, trailing-slash-normalised list of live source PHP filesystem roots for migrate path detect/repair (not related to `/cache/` exclude). Always includes ABSPATH. Adds `WP_CONTENT_DIR` only when it is not `{ABSPATH}wp-content`. Adds `wp_upload_dir()['basedir']` and a non-empty `upload_path` option (relative values are resolved against ABSPATH). When `realpath()` differs (for example `/home` vs `/home2`), both variants are recorded. Sibling fields `upload_path` and `upload_url_path` echo the current `wp_options` values (empty string when unset) for reports. Existing `wp_content_path` / `wp_uploads_path` are unchanged.
 
 `GET|POST /wp-json/stack2/v1/backups/{job_id}/files/scan?cursor=&limit=&include_sha256=0&include_dirs=0`
 

@@ -45,6 +45,9 @@ class BackupApiAgentInventoryTest extends BackupTestCase
         $this->assertTrue($data['manifest']['manifest_complete']);
         $this->assertSame(0, $data['manifest']['estimated_files_count']);
         $this->assertSame(array('wp_options', 'wp_posts'), $data['manifest']['tables']);
+        $this->assertContains(trailingslashit(wp_normalize_path(ABSPATH)), $data['manifest']['source_paths']);
+        $this->assertArrayHasKey('upload_path', $data['manifest']);
+        $this->assertArrayHasKey('upload_url_path', $data['manifest']);
         $this->assertSame(array(), $GLOBALS['stack2_cron']);
     }
 

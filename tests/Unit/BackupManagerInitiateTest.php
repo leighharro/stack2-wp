@@ -29,6 +29,9 @@ class BackupManagerInitiateTest extends BackupTestCase
         $this->assertSame(0, $manifest['estimated_files_count']);
         $this->assertSame('agent', $manifest['manifest_mode']);
         $this->assertTrue($manifest['manifest_complete']);
+        $this->assertContains(trailingslashit(wp_normalize_path(ABSPATH)), $manifest['source_paths']);
+        $this->assertSame('', $manifest['upload_path']);
+        $this->assertSame('', $manifest['upload_url_path']);
 
         $job_dir = trailingslashit($this->backup_dir) . 'job_prepare';
         $this->assertDirectoryExists($job_dir);
