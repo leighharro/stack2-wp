@@ -24,6 +24,14 @@ class Stack2_Backup_Manifest
         $manifest_complete = array_key_exists('manifest_complete', $options)
             ? (bool) $options['manifest_complete']
             : !$include_files;
+        $upload_path = trim((string) get_option('upload_path', ''));
+        $upload_url_path = trim((string) get_option('upload_url_path', ''));
+        $source_paths = $this->build_source_paths(
+            defined('ABSPATH') ? (string) ABSPATH : '',
+            defined('WP_CONTENT_DIR') ? (string) WP_CONTENT_DIR : '',
+            (string) ($uploads['basedir'] ?? ''),
+            $upload_path
+        );
 
         return array(
             'backup_id' => $backup_id,
@@ -38,6 +46,9 @@ class Stack2_Backup_Manifest
             'include_database' => $include_database,
             'wp_content_path' => WP_CONTENT_DIR,
             'wp_uploads_path' => (string) ($uploads['basedir'] ?? ''),
+            'source_paths' => $source_paths,
+            'upload_path' => $upload_path,
+            'upload_url_path' => $upload_url_path,
             'database' => array(
                 'host' => (string) ($database_info['host'] ?? ''),
                 'port' => (int) ($database_info['port'] ?? 3306),
@@ -53,6 +64,127 @@ class Stack2_Backup_Manifest
             'manifest_mode' => (string) ($options['manifest_mode'] ?? 'agent'),
             'manifest_complete' => $manifest_complete,
         );
+    }
+
+    /**
+     * Absolute filesystem roots from live source PHP for migrate path detect/repair.
+     * Trailing-slash normalised, unique, with realpath variants when they differ.
+     *
+     * @return array<int, string>
+     */
+    public function collect_source_paths(): array
+    {
+        $uploads = wp_upload_dir();
+
+        return $this->build_source_paths(
+            defined('ABSPATH') ? (string) ABSPATH : '',
+            defined('WP_CONTENT_DIR') ? (string) WP_CONTENT_DIR : '',
+            (string) ($uploads['basedir'] ?? ''),
+            trim((string) get_option('upload_path', ''))
+        );
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public function build_source_paths(
+        string $abspath,
+        string $wp_content_dir,
+        string $uploads_basedir,
+        string $upload_path
+    ): array {
+        $paths = array();
+
+        $this->add_source_path($paths, $abspath);
+
+        $default_content = $this->normalize_source_dir(
+            $abspath !== '' ? trailingslashit(wp_normalize_path($abspath)) . 'wp-content' : ''
+        );
+        $custom_content = $this->normalize_source_dir($wp_content_dir);
+        if ($custom_content !== '' && $custom_content !== $default_content) {
+            $this->add_source_path($paths, $wp_content_dir);
+        }
+
+        $this->add_source_path($paths, $uploads_basedir);
+
+        $resolved_upload_path = $this->resolve_upload_path($upload_path, $abspath);
+        if ($resolved_upload_path !== '') {
+            $this->add_source_path($paths, $resolved_upload_path);
+        }
+
+        return array_values($paths);
+    }
+
+    /**
+     * @param array<string, string> $paths
+     */
+    private function add_source_path(array &$paths, string $path): void
+    {
+        $normalized = $this->normalize_source_dir($path);
+        if ($normalized === '' || $normalized === '/') {
+            return;
+        }
+
+        $paths[$normalized] = $normalized;
+
+        $existing = untrailingslashit($normalized);
+        if ($existing === '' || !file_exists($existing)) {
+            return;
+        }
+
+        $real = realpath($existing);
+        if ($real === false) {
+            return;
+        }
+
+        $real_normalized = $this->normalize_source_dir($real);
+        if ($real_normalized === '' || $real_normalized === '/') {
+            return;
+        }
+
+        $paths[$real_normalized] = $real_normalized;
+    }
+
+    private function resolve_upload_path(string $upload_path, string $abspath): string
+    {
+        $upload_path = trim($upload_path);
+        if ($upload_path === '') {
+            return '';
+        }
+
+        if ($this->is_absolute_path($upload_path)) {
+            return $upload_path;
+        }
+
+        if (trim($abspath) === '') {
+            return $upload_path;
+        }
+
+        return trailingslashit(wp_normalize_path($abspath)) . ltrim(wp_normalize_path($upload_path), '/');
+    }
+
+    private function is_absolute_path(string $path): bool
+    {
+        $normalized = wp_normalize_path($path);
+        if ($normalized === '') {
+            return false;
+        }
+
+        if ($normalized[0] === '/') {
+            return true;
+        }
+
+        return (bool) preg_match('#^[A-Za-z]:/#', $normalized);
+    }
+
+    private function normalize_source_dir(string $path): string
+    {
+        $path = trim($path);
+        if ($path === '' || strpos($path, "\0") !== false) {
+            return '';
+        }
+
+        return trailingslashit(wp_normalize_path($path));
     }
 
     private function sanitize_manifest_files($files): array

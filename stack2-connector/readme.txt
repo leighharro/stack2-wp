@@ -4,7 +4,7 @@ Tags: stack2, automation, plugin management, backup, inventory
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 1.1.16
+Stable tag: 1.1.17
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -71,6 +71,10 @@ Automatic scheduled sync relies on WP-Cron. Manual sync is available from plugin
 Stack2 Connector is not distributed on wordpress.org. It checks GitHub Releases (https://github.com/leighharro/stack2-wp/releases/latest) for new versions and integrates with WordPress's normal plugin update UI, including the built-in "Enable auto-updates" option on the Plugins page. Downloaded packages are verified against the release's published SHA256 checksum before install. Like scheduled sync, checking for updates and background auto-updates rely on WP-Cron; a manual "Check for Updates" button is available from plugin settings.
 
 == Changelog ==
+
+= 1.1.17 =
+- Backup initiate manifest records `source_paths[]` from live source PHP: ABSPATH, custom WP_CONTENT_DIR (when not `{ABSPATH}wp-content`), uploads basedir and/or non-empty `upload_path`, plus realpath variants when they differ. Paths are trailing-slash normalised.
+- Optional sibling fields `upload_path` and `upload_url_path` (current wp_options) for migrate path-detect reports. Not related to `/cache/` exclude (1.1.14).
 
 = 1.1.16 =
 - HMAC-signed `GET|POST .../files/excluded` returns a complete paginated catalog of paths excluded from a backup scan (relative path, first `matched_pattern`, optional size/mtime; no SHA).
