@@ -38,6 +38,7 @@ class Stack2_Backup_Manifest
             'job_id' => $job_id,
             'wordpress_version' => get_bloginfo('version'),
             'php_version' => PHP_VERSION,
+            'connector_version' => defined('STACK2_CONNECTOR_VERSION') ? (string) STACK2_CONNECTOR_VERSION : '',
             'site_url' => get_site_url(),
             'home_url' => home_url('/'),
             'generated_at' => $generated_at,

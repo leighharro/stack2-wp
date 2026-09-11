@@ -28,6 +28,8 @@ class BackupManifestSourcePathsTest extends BackupTestCase
         $this->assertNotContains($default_content, $manifest['source_paths']);
         $this->assertSame('', $manifest['upload_path']);
         $this->assertSame('', $manifest['upload_url_path']);
+        $this->assertArrayHasKey('connector_version', $manifest);
+        $this->assertSame(STACK2_CONNECTOR_VERSION, $manifest['connector_version']);
         $this->assertSame(WP_CONTENT_DIR, $manifest['wp_content_path']);
         $this->assertSame(trailingslashit(WP_CONTENT_DIR) . 'uploads', $manifest['wp_uploads_path']);
     }

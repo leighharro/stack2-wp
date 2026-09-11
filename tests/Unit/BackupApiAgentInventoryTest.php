@@ -48,6 +48,8 @@ class BackupApiAgentInventoryTest extends BackupTestCase
         $this->assertContains(trailingslashit(wp_normalize_path(ABSPATH)), $data['manifest']['source_paths']);
         $this->assertArrayHasKey('upload_path', $data['manifest']);
         $this->assertArrayHasKey('upload_url_path', $data['manifest']);
+        $this->assertArrayHasKey('connector_version', $data['manifest']);
+        $this->assertSame(STACK2_CONNECTOR_VERSION, $data['manifest']['connector_version']);
         $this->assertSame(array(), $GLOBALS['stack2_cron']);
     }
 
