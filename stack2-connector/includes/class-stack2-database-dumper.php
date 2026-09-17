@@ -98,16 +98,9 @@ class Stack2_Database_Dumper
             $columns_sql = '';
 
             while (true) {
-                $rows = $wpdb->get_results(
-                    $wpdb->prepare(
-                        "SELECT * FROM `{$table}` LIMIT %d OFFSET %d",
-                        $chunk_size,
-                        $offset
-                    ),
-                    ARRAY_A
-                );
+                $rows = $this->get_table_rows($table, $chunk_size, $offset);
 
-                if (!is_array($rows) || empty($rows)) {
+                if (empty($rows)) {
                     break;
                 }
 
@@ -195,13 +188,16 @@ class Stack2_Database_Dumper
         $gz_file = $sql_file . '.gz';
 
         // Cache check before the existence query — serves retries from disk without a DB round-trip.
-        if (file_exists($gz_file) && $this->verify_dump($gz_file)) {
-            return array(
-                'file' => $gz_file,
-                'size_bytes' => (int) filesize($gz_file),
-                'table' => $table_name,
-                'rows_processed' => 0,
-            );
+        if (file_exists($gz_file)) {
+            if ($this->verify_dump($gz_file)) {
+                return array(
+                    'file' => $gz_file,
+                    'size_bytes' => (int) filesize($gz_file),
+                    'table' => $table_name,
+                    'rows_processed' => 0,
+                );
+            }
+            @unlink($gz_file);
         }
 
         // SHOW TABLES LIKE is faster than information_schema.TABLES on large databases.
@@ -242,16 +238,9 @@ class Stack2_Database_Dumper
         $columns_sql = '';
 
         while (true) {
-            $rows = $wpdb->get_results(
-                $wpdb->prepare(
-                    "SELECT * FROM `{$escaped_table}` LIMIT %d OFFSET %d",
-                    $chunk_size,
-                    $offset
-                ),
-                ARRAY_A
-            );
+            $rows = $this->get_table_rows($table_name, $chunk_size, $offset);
 
-            if (!is_array($rows) || empty($rows)) {
+            if (empty($rows)) {
                 break;
             }
 
@@ -376,18 +365,17 @@ class Stack2_Database_Dumper
             $offset = 0;
             $batch_values = array();
             $columns_sql = '';
+            $incomplete = false;
 
             while (true) {
-                $rows = $wpdb->get_results(
-                    $wpdb->prepare(
-                        "SELECT * FROM `{$escaped}` LIMIT %d OFFSET %d",
-                        $chunk_size,
-                        $offset
-                    ),
-                    ARRAY_A
-                );
+                if ($this->client_disconnected()) {
+                    $incomplete = true;
+                    break;
+                }
 
-                if (!is_array($rows) || empty($rows)) {
+                $rows = $this->get_table_rows($table_name, $chunk_size, $offset);
+
+                if (empty($rows)) {
                     break;
                 }
 
@@ -420,19 +408,27 @@ class Stack2_Database_Dumper
                 }
 
                 $write_compressed('', ZLIB_SYNC_FLUSH);
-                flush();
+                if (!$this->client_disconnected()) {
+                    flush();
+                }
 
-                if (connection_aborted()) {
+                if ($this->client_disconnected()) {
+                    $incomplete = true;
                     break;
                 }
 
                 $offset += $chunk_size;
             }
 
-            $footer = "\nSET FOREIGN_KEY_CHECKS=1;\n";
-            $write_compressed($footer, ZLIB_FINISH);
-
-            $success = true;
+            if ($incomplete || $this->client_disconnected()) {
+                $this->logger->info('Table dump aborted by client; discarding incomplete gzip cache.', array(
+                    'table' => $table_name,
+                ));
+            } else {
+                $footer = "\nSET FOREIGN_KEY_CHECKS=1;\n";
+                $write_compressed($footer, ZLIB_FINISH);
+                $success = true;
+            }
         } finally {
             fclose($out);
             fclose($cache_fh);
@@ -453,7 +449,12 @@ class Stack2_Database_Dumper
         $safe_name = is_string($safe_name) ? $safe_name : $table_name;
         $gz_file = trailingslashit($temp_dir) . 'database-table-' . $safe_name . '.sql.gz';
 
-        if (!file_exists($gz_file) || !$this->verify_dump($gz_file)) {
+        if (!file_exists($gz_file)) {
+            return array();
+        }
+
+        if (!$this->verify_dump($gz_file)) {
+            @unlink($gz_file);
             return array();
         }
 
@@ -523,26 +524,219 @@ class Stack2_Database_Dumper
         }
 
         $size = filesize($dump_file);
-        if ($size === false || (int) $size <= 0) {
+        // gzip header (10) + CRC32 (4) + ISIZE (4)
+        if ($size === false || (int) $size < 18) {
             return false;
         }
 
-        // Read and verify just the first chunk to avoid decompressing entire file
-        $gz_file = gzopen($dump_file, 'rb');
-        if ($gz_file === false) {
+        $handle = fopen($dump_file, 'rb');
+        if ($handle === false) {
             return false;
         }
 
         try {
-            $first_chunk = gzread($gz_file, 4096);
-            if ($first_chunk === false || strlen($first_chunk) === 0) {
+            $magic = fread($handle, 2);
+            if ($magic !== "\x1f\x8b") {
                 return false;
             }
 
-            return strpos($first_chunk, 'CREATE TABLE') !== false;
+            if (fseek($handle, -4, SEEK_END) !== 0) {
+                return false;
+            }
+
+            $isize_bytes = fread($handle, 4);
+            if ($isize_bytes === false || strlen($isize_bytes) !== 4) {
+                return false;
+            }
+
+            $isize_unpacked = unpack('Visize', $isize_bytes);
+            if (!is_array($isize_unpacked) || !isset($isize_unpacked['isize'])) {
+                return false;
+            }
+            $isize = (int) $isize_unpacked['isize'];
+
+            if (fseek($handle, 0, SEEK_SET) !== 0) {
+                return false;
+            }
+
+            $ctx = inflate_init(ZLIB_ENCODING_GZIP);
+            if ($ctx === false) {
+                return false;
+            }
+
+            $decompressed_len = 0;
+            $head = '';
+            $tail = '';
+
+            while (!feof($handle)) {
+                $chunk = fread($handle, 65536);
+                if ($chunk === false) {
+                    return false;
+                }
+                if ($chunk === '') {
+                    break;
+                }
+
+                $raw = inflate_add($ctx, $chunk, ZLIB_NO_FLUSH);
+                if ($raw === false) {
+                    return false;
+                }
+
+                $decompressed_len += strlen($raw);
+                if (strlen($head) < 8192) {
+                    $head .= $raw;
+                    if (strlen($head) > 8192) {
+                        $head = substr($head, 0, 8192);
+                    }
+                }
+
+                $tail .= $raw;
+                if (strlen($tail) > 256) {
+                    $tail = substr($tail, -256);
+                }
+            }
+
+            $raw = inflate_add($ctx, '', ZLIB_FINISH);
+            if ($raw === false) {
+                return false;
+            }
+
+            $decompressed_len += strlen($raw);
+            if (strlen($head) < 8192) {
+                $head .= $raw;
+            }
+            $tail .= $raw;
+            if (strlen($tail) > 256) {
+                $tail = substr($tail, -256);
+            }
+
+            if (strpos($head, 'CREATE TABLE') === false) {
+                return false;
+            }
+
+            if (strpos($tail, 'SET FOREIGN_KEY_CHECKS=1') === false) {
+                return false;
+            }
+
+            // gzip ISIZE is uncompressed length modulo 2^32.
+            return ($decompressed_len % 4294967296) === $isize;
         } finally {
-            gzclose($gz_file);
+            fclose($handle);
         }
+    }
+
+    /**
+     * True when the HTTP client dropped the first-stream download.
+     * Incomplete dumps must not be finalized as cached gzip members.
+     */
+    protected function client_disconnected(): bool
+    {
+        return function_exists('connection_aborted') && (int) connection_aborted() === 1;
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function get_table_rows(string $table_name, int $chunk_size, int $offset): array
+    {
+        global $wpdb;
+
+        $escaped = str_replace('`', '``', $table_name);
+        $sql = "SELECT * FROM `{$escaped}`";
+        $params = array();
+
+        if ($this->is_options_table($table_name)) {
+            $sql .= ' WHERE `option_name` NOT LIKE %s AND `option_name` NOT LIKE %s'
+                . ' AND `option_name` NOT LIKE %s AND `option_name` NOT LIKE %s';
+            foreach ($this->checksum_transient_like_patterns() as $pattern) {
+                $params[] = $pattern;
+            }
+        }
+
+        $sql .= ' LIMIT %d OFFSET %d';
+        $params[] = $chunk_size;
+        $params[] = $offset;
+
+        $prepared = $wpdb->prepare($sql, ...$params);
+        if (!is_string($prepared) || $prepared === '') {
+            return array();
+        }
+
+        $rows = $wpdb->get_results($prepared, ARRAY_A);
+        if (!is_array($rows)) {
+            return array();
+        }
+
+        if (!$this->is_options_table($table_name)) {
+            return $rows;
+        }
+
+        $kept = array();
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $name = (string) ($row['option_name'] ?? '');
+            if ($this->is_checksum_transient_option($name)) {
+                continue;
+            }
+            $kept[] = $row;
+        }
+
+        return $kept;
+    }
+
+    private function is_options_table(string $table_name): bool
+    {
+        global $wpdb;
+
+        if (isset($wpdb->options) && is_string($wpdb->options) && $wpdb->options !== '' && $table_name === $wpdb->options) {
+            return true;
+        }
+
+        return (bool) preg_match('/(?:^|_)options$/i', $table_name);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function checksum_transient_like_patterns(): array
+    {
+        global $wpdb;
+
+        $patterns = array();
+        foreach ($this->checksum_transient_prefixes() as $prefix) {
+            $escaped = $wpdb->esc_like($prefix);
+            $patterns[] = is_string($escaped) ? $escaped . '%' : $prefix . '%';
+        }
+
+        return $patterns;
+    }
+
+    /**
+     * Connector file-hash cache keys stored as WordPress transients in options.
+     *
+     * @return array<int, string>
+     */
+    private function checksum_transient_prefixes(): array
+    {
+        return array(
+            '_transient_stack2_cksum_',
+            '_transient_timeout_stack2_cksum_',
+            '_site_transient_stack2_cksum_',
+            '_site_transient_timeout_stack2_cksum_',
+        );
+    }
+
+    private function is_checksum_transient_option(string $option_name): bool
+    {
+        foreach ($this->checksum_transient_prefixes() as $prefix) {
+            if (str_starts_with($option_name, $prefix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

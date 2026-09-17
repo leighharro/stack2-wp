@@ -40,6 +40,10 @@ if (!defined('ARRAY_A')) {
     define('ARRAY_A', 'ARRAY_A');
 }
 
+if (!defined('ARRAY_N')) {
+    define('ARRAY_N', 'ARRAY_N');
+}
+
 $GLOBALS['stack2_transients'] = array();
 $GLOBALS['stack2_options'] = array();
 $GLOBALS['stack2_cron'] = array();
@@ -394,6 +398,36 @@ class WP_REST_Server
 
 class FakeWpdb
 {
+    public string $options = 'wp_options';
+
+    public function esc_like($text)
+    {
+        return addcslashes((string) $text, '_%\\');
+    }
+
+    public function prepare($query, ...$args)
+    {
+        if (count($args) === 1 && is_array($args[0])) {
+            $args = $args[0];
+        }
+
+        $index = 0;
+        $rendered = preg_replace_callback('/%[sdf]/', static function ($match) use ($args, &$index) {
+            $value = $args[$index] ?? '';
+            $index++;
+            if ($match[0] === '%d') {
+                return (string) (int) $value;
+            }
+            if ($match[0] === '%f') {
+                return (string) (float) $value;
+            }
+
+            return "'" . addslashes((string) $value) . "'";
+        }, (string) $query);
+
+        return is_string($rendered) ? $rendered : '';
+    }
+
     public function get_results($query, $output = null)
     {
         return array(

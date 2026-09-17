@@ -72,6 +72,11 @@ Stack2 Connector is not distributed on wordpress.org. It checks GitHub Releases 
 
 == Changelog ==
 
+= 1.1.19 =
+- Exclude Connector checksum transients (`_transient_stack2_cksum_%`, `_transient_timeout_stack2_cksum_%`, and site-transient equivalents) from `*_options` table dumps so first-stream gzip stays smaller.
+- Treat `connection_aborted()` / incomplete client download as an incomplete table dump: do not leave a truncated gzip that later gets a checksum. Cached dumps must pass gzip CRC/ISIZE and a complete SQL footer, not a 4KB `CREATE TABLE` peek.
+- Pair with Platform GuaranaApp #180, which rejects truncated gzip table dumps on download.
+
 = 1.1.18 =
 - Backup initiate manifest records `connector_version` (string, same as plugin header / `STACK2_CONNECTOR_VERSION`) so Platform can check backup compatibility.
 
