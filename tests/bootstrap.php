@@ -7,7 +7,7 @@ if (!defined('STACK2_CONNECTOR_PATH')) {
 }
 
 if (!defined('STACK2_CONNECTOR_VERSION')) {
-    define('STACK2_CONNECTOR_VERSION', '1.1.19');
+    define('STACK2_CONNECTOR_VERSION', '1.1.20');
 }
 
 $plugin_includes = dirname(__DIR__) . '/stack2-connector/includes';
@@ -15,6 +15,8 @@ $plugin_includes = dirname(__DIR__) . '/stack2-connector/includes';
 require_once $plugin_includes . '/class-stack2-logger.php';
 require_once $plugin_includes . '/class-stack2-signature-service.php';
 require_once $plugin_includes . '/class-stack2-backup-authentication.php';
+require_once $plugin_includes . '/class-stack2-restore-script-store.php';
+require_once $plugin_includes . '/class-stack2-restore-api.php';
 require_once $plugin_includes . '/class-stack2-backup-compressor.php';
 require_once $plugin_includes . '/class-stack2-database-dumper.php';
 require_once $plugin_includes . '/class-stack2-backup-manifest.php';

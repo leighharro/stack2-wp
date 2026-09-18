@@ -191,6 +191,9 @@ class Stack2_Command_Executor
         }
         wp_clear_scheduled_hook(Stack2_Plugin::CRON_HOOK_SYNC, array(0, 'cron'));
         delete_transient('stack2_sync_lock');
+        if (class_exists('Stack2_Restore_Script_Store')) {
+            (new Stack2_Restore_Script_Store(null, $this->logger))->delete(null);
+        }
 
         $this->logger->info('Disconnected from Stack2: credentials cleared.');
 

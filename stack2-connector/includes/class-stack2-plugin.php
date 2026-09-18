@@ -54,7 +54,9 @@ class Stack2_Plugin
     {
         add_action('rest_api_init', array($this, 'register_rest_controller'));
         add_action('init', array($this->sso_service, 'maybe_complete_login'), 1);
+        add_action('init', array($this, 'expire_restore_script_if_stale'));
         add_action(self::CRON_HOOK_SYNC, array($this, 'handle_scheduled_sync'), 10, 2);
+        add_action(Stack2_Restore_Script_Store::CRON_HOOK, array($this, 'expire_restore_script_if_stale'));
         add_filter('cron_schedules', array($this, 'register_cron_schedule'));
 
         $this->update_checker->bootstrap();
@@ -85,6 +87,7 @@ class Stack2_Plugin
     {
         wp_clear_scheduled_hook(self::CRON_HOOK_SYNC);
         wp_clear_scheduled_hook(self::LEGACY_CRON_HOOK_MANIFEST);
+        wp_clear_scheduled_hook(Stack2_Restore_Script_Store::CRON_HOOK);
         delete_transient(self::LOCK_TRANSIENT);
     }
 
@@ -126,6 +129,21 @@ class Stack2_Plugin
         );
 
         $sso_api->register_routes();
+
+        $restore_api = new Stack2_Restore_API(
+            new Stack2_Restore_Script_Store(ABSPATH, $this->logger),
+            new Stack2_Backup_Authentication($this->signature_service),
+            $this->logger,
+            $this->get_site_id(),
+            $this->get_api_key()
+        );
+
+        $restore_api->register_routes();
+    }
+
+    public function expire_restore_script_if_stale(): void
+    {
+        (new Stack2_Restore_Script_Store(ABSPATH, $this->logger))->expire_if_stale();
     }
 
     public function register_cron_schedule(array $schedules): array

@@ -16,6 +16,8 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
 - Backup file download endpoint: `GET /wp-json/stack2/v1/backups/{job_id}/files/{base64url_relative_path}`
 - Backup cleanup endpoint: `DELETE /wp-json/stack2/v1/backups/{job_id}`
 - Backup list endpoint: deprecated in stateless mode
+- Restore script place: `PUT|POST /wp-json/stack2/v1/restore-script`
+- Restore script delete: `DELETE /wp-json/stack2/v1/restore-script`
 - HMAC SHA256 request signing and timestamp replay protection
 - Allowed commands: `install`, `update`, `activate`, `deactivate`, `delete`, `inventory`, `disconnect`, `check_updates`
 - WP-Cron scheduled sync with retry backoff for transient failures
@@ -136,6 +138,47 @@ The initiate response is a small JSON envelope. `manifest.files` is always an em
 Initiate advertises the same limits as `scan.default_limit` / `scan.max_limit`, `stats.default_batch` / `stats.max_batch`, and `excluded.default_limit` / `excluded.max_limit`. The initiate envelope also echoes `disable_exclusions`. Singular aliases (`/backup/...`) remain registered.
 
 The previous paged `GET .../manifest` build (WP-Cron, NDJSON ledger, HTTP 202) has been removed.
+
+## Restore script placement (Plugin Restore)
+
+Connector **≥ 1.1.20** places and deletes the same restore PHP BatchPush already uploads over FTP. Platform still runs the HTTP restore steps against that script URL. The plugin does not implement a second restore protocol.
+
+- Filename allowlist: docroot `stack2-{backupId}.php` only (`backupId` is 8–128 chars of `A-Za-z0-9_-`, matching Platform `stack2-{backupId}.php`). Paths with `/`, `..`, or any other name are rejected.
+- Atomic write (temp file + rename). Failed writes leave no target and clean leftover `.tmp.*` siblings.
+- Disconnected / missing site API key → HTTP `503` (`Connector is disconnected or not ready.`) before any write.
+- Plugin TTL self-delete defaults to **6 hours** (`ttl_seconds` optional, clamped 60–86400). WP-Cron plus `init` both expire a stale script if Platform is unreachable.
+- Disconnect also deletes a tracked restore script.
+- Never log API keys, restore keys, or script body.
+
+### Place
+
+`PUT|POST /wp-json/stack2/v1/restore-script`
+
+HMAC (same headers as backup endpoints):
+
+- `{METHOD}:/wp-json/stack2/v1/restore-script:{timestamp}:{sha256_hex_of_raw_body}`
+
+JSON body (preferred; covered by the HMAC body hash):
+
+```json
+{
+  "filename": "stack2-550e8400-e29b-41d4-a716-446655440000.php",
+  "content": "<?php /* same BatchPush restore PHP bytes */",
+  "ttl_seconds": 21600
+}
+```
+
+`content_base64` is accepted instead of `content`. Raw PHP body is also accepted; then `filename` must be a query param or `X-Stack2-Restore-Filename` (still allowlisted). Max body 2 MiB. Must start with `<?php`.
+
+Success: HTTP 200 `{ "success": true, "filename": "stack2-….php", "bytes": 1234, "ttl_seconds": 21600 }`.
+
+### Delete
+
+`DELETE /wp-json/stack2/v1/restore-script`
+
+HMAC: `DELETE:/wp-json/stack2/v1/restore-script:{timestamp}:{sha256_hex_of_raw_body}` (empty body hash is `sha256("")`).
+
+Optional JSON `{ "filename": "stack2-….php" }`. Omit filename to delete the tracked script. **Idempotent:** HTTP 200 if the file is already gone (`already_gone: true`).
 
 ## Backup Status Values
 

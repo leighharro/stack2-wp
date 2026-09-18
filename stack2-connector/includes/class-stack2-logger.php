@@ -41,7 +41,17 @@ class Stack2_Logger
 
     private function sanitize_context(array $context): array
     {
-        $sensitive = array('api_key', 'signature', 'authorization', 'x-stack2-signature');
+        $sensitive = array(
+            'api_key',
+            'signature',
+            'authorization',
+            'x-stack2-signature',
+            'restore_key',
+            'restorekey',
+            'x-stack2-restore-key',
+            'token',
+            'password',
+        );
 
         foreach ($context as $key => $value) {
             if (in_array(strtolower((string) $key), $sensitive, true)) {
