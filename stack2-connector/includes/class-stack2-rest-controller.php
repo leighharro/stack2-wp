@@ -85,7 +85,12 @@ class Stack2_REST_Controller
             ), 400);
         }
 
-        $result = $this->command_executor->execute($action, $plugin_file, $slug);
+        $options = array();
+        if ($action === 'inventory' && array_key_exists('refresh', $payload)) {
+            $options['refresh'] = $this->is_truthful_flag($payload['refresh']);
+        }
+
+        $result = $this->command_executor->execute($action, $plugin_file, $slug, $options);
         $status = $result['success'] ? 200 : (int) ($result['http_status'] ?? 400);
 
         if (!$result['success']) {
@@ -98,12 +103,33 @@ class Stack2_REST_Controller
             'inventory' => $result['inventory'] ?? null,
         );
 
-        foreach (array('status', 'installed_version', 'available_version') as $key) {
+        foreach (array('status', 'installed_version', 'available_version', 'error_code', 'skin_messages', 'not_applied', 'plugin_version') as $key) {
             if (array_key_exists($key, $result)) {
                 $response[$key] = $result[$key];
             }
         }
 
         return new WP_REST_Response($response, $status);
+    }
+
+    /**
+     * Accept JSON true/1 and the common string forms. Anything else is false
+     * so a stray refresh value cannot force a WordPress.org update check.
+     *
+     * @param mixed $value
+     */
+    private function is_truthful_flag($value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value)) {
+            return $value === 1;
+        }
+        if (is_string($value)) {
+            return in_array(strtolower(trim($value)), array('1', 'true', 'yes', 'on'), true);
+        }
+
+        return false;
     }
 }

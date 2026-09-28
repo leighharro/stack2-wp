@@ -6,13 +6,20 @@ if (!defined('ABSPATH')) {
 
 class Stack2_Inventory_Collector
 {
-    public function collect(string $site_id): array
+    public function collect(string $site_id, bool $refresh = false): array
     {
-        if (!function_exists('get_plugins')) {
-            require_once ABSPATH . 'wp-admin/includes/plugin.php';
+        if ($refresh) {
+            $this->refresh_plugin_update_check();
         }
 
-        $all_plugins = get_plugins();
+        if (!function_exists('get_plugins')) {
+            $plugin_file = ABSPATH . 'wp-admin/includes/plugin.php';
+            if (is_readable($plugin_file)) {
+                require_once $plugin_file;
+            }
+        }
+
+        $all_plugins = function_exists('get_plugins') ? get_plugins() : array();
         $updates = get_site_transient('update_plugins');
         $update_map = is_object($updates) && isset($updates->response) && is_array($updates->response)
             ? $updates->response
@@ -32,11 +39,11 @@ class Stack2_Inventory_Collector
                 'author' => sanitize_text_field(wp_strip_all_tags($plugin_data['Author'] ?? '')),
                 'plugin_uri' => esc_url_raw($plugin_data['PluginURI'] ?? ''),
                 'description' => sanitize_textarea_field(wp_strip_all_tags($plugin_data['Description'] ?? '')),
-                'is_active' => is_plugin_active($plugin_file),
+                'is_active' => function_exists('is_plugin_active') && is_plugin_active($plugin_file),
                 'has_update' => (bool) $update_data,
-                'latest_version' => $update_data && isset($update_data->new_version)
-                    ? sanitize_text_field((string) $update_data->new_version)
-                    : null,
+                'latest_version' => $this->latest_version($update_data),
+                'update_package_available' => $this->update_package_available($update_data),
+                'upgrade_notice' => $this->upgrade_notice($update_data),
             );
         }
 
@@ -54,5 +61,112 @@ class Stack2_Inventory_Collector
     {
         $parts = explode('/', $plugin_file);
         return sanitize_title($parts[0] ?? $plugin_file);
+    }
+
+    /**
+     * Drop a fresh update_plugins transient so wp_update_plugins() does not
+     * bail out on last_checked, then let WordPress repopulate it.
+     */
+    private function refresh_plugin_update_check(): void
+    {
+        if (!function_exists('wp_update_plugins')) {
+            $update_file = ABSPATH . 'wp-admin/includes/update.php';
+            if (is_readable($update_file)) {
+                require_once $update_file;
+            }
+        }
+
+        if (!function_exists('wp_update_plugins')) {
+            return;
+        }
+
+        delete_site_transient('update_plugins');
+        wp_update_plugins();
+    }
+
+    /**
+     * @param mixed $update_data
+     */
+    private function latest_version($update_data): ?string
+    {
+        if (!$this->update_record_has($update_data, 'new_version')) {
+            return null;
+        }
+
+        $version = $this->update_record_value($update_data, 'new_version');
+        if (!is_scalar($version)) {
+            return null;
+        }
+
+        $version = sanitize_text_field((string) $version);
+
+        return $version === '' ? null : $version;
+    }
+
+    /**
+     * True/false when the update transient has a package field; null when
+     * WordPress has not said whether a download package exists.
+     *
+     * @param mixed $update_data
+     */
+    private function update_package_available($update_data): ?bool
+    {
+        if (!$this->update_record_has($update_data, 'package')) {
+            return null;
+        }
+
+        $package = $this->update_record_value($update_data, 'package');
+
+        return is_string($package) && trim($package) !== '';
+    }
+
+    /**
+     * @param mixed $update_data
+     */
+    private function upgrade_notice($update_data): ?string
+    {
+        if (!$this->update_record_has($update_data, 'upgrade_notice')) {
+            return null;
+        }
+
+        $notice = $this->update_record_value($update_data, 'upgrade_notice');
+        if (!is_string($notice)) {
+            return null;
+        }
+
+        $notice = trim(wp_strip_all_tags($notice));
+
+        return $notice === '' ? null : $notice;
+    }
+
+    /**
+     * @param mixed $update_data
+     */
+    private function update_record_has($update_data, string $field): bool
+    {
+        if (is_object($update_data)) {
+            return property_exists($update_data, $field);
+        }
+        if (is_array($update_data)) {
+            return array_key_exists($field, $update_data);
+        }
+
+        return false;
+    }
+
+    /**
+     * @param mixed $update_data
+     * @return mixed
+     */
+    private function update_record_value($update_data, string $field)
+    {
+        if (is_object($update_data)) {
+            return $update_data->{$field};
+        }
+        if (is_array($update_data)) {
+            return $update_data[$field];
+        }
+
+        return null;
     }
 }
