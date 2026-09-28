@@ -23,12 +23,16 @@ class Stack2_Command_Executor
         $this->update_checker = $update_checker;
     }
 
-    public function execute(string $action, ?string $plugin_file, ?string $slug): array
+    public function execute(string $action, ?string $plugin_file, ?string $slug, array $options = array()): array
     {
         try {
             switch ($action) {
                 case 'inventory':
-                    return array('success' => true, 'error' => null, 'inventory' => $this->inventory_collector->collect($this->site_id));
+                    return array(
+                        'success' => true,
+                        'error' => null,
+                        'inventory' => $this->inventory_collector->collect($this->site_id, !empty($options['refresh'])),
+                    );
 
                 case 'install':
                     return $this->install_plugin($slug);
@@ -92,28 +96,188 @@ class Stack2_Command_Executor
             return array('success' => false, 'error' => 'Update action requires plugin file or resolvable slug.', 'inventory' => null);
         }
 
-        require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
-        require_once ABSPATH . 'wp-admin/includes/file.php';
-        require_once ABSPATH . 'wp-admin/includes/misc.php';
-        require_once ABSPATH . 'wp-admin/includes/plugin.php';
+        $this->ensure_plugin_upgrader_loaded();
 
-        $was_active = is_plugin_active($resolved);
+        $was_active = function_exists('is_plugin_active') && is_plugin_active($resolved);
+        $version_before = $this->installed_plugin_version($resolved);
 
         // Plugin_Upgrader::upgrade() does not reactivate the plugin afterward; only
         // bulk_upgrade() hooks active_after_upgrade to restore the pre-update active state.
-        $upgrader = new Plugin_Upgrader(new Automatic_Upgrader_Skin());
+        $skin = new Automatic_Upgrader_Skin();
+        $upgrader = new Plugin_Upgrader($skin);
         $results = $upgrader->bulk_upgrade(array($resolved));
         $result = is_array($results) ? ($results[$resolved] ?? null) : $results;
+        $message_skin = (isset($upgrader->skin) && is_object($upgrader->skin)) ? $upgrader->skin : $skin;
+        $skin_messages = $this->upgrader_skin_messages($message_skin);
 
         if (is_wp_error($result) || empty($result)) {
-            return array('success' => false, 'error' => 'Plugin update failed. Filesystem credentials may be required.', 'inventory' => null);
+            return $this->update_failed_response($result, $skin_messages, $version_before);
         }
 
-        if ($was_active && !is_plugin_active($resolved)) {
+        if (function_exists('wp_clean_plugins_cache')) {
+            wp_clean_plugins_cache(true);
+        }
+
+        if ($was_active && function_exists('is_plugin_active') && !is_plugin_active($resolved) && function_exists('activate_plugin')) {
             activate_plugin($resolved);
         }
 
-        return array('success' => true, 'error' => null, 'inventory' => $this->inventory_collector->collect($this->site_id));
+        $version_after = $this->installed_plugin_version($resolved);
+        if ($this->plugin_version_unchanged($version_before, $version_after)) {
+            $response = array(
+                'success' => false,
+                'error' => sprintf('Plugin update did not change the installed version (%s).', $version_after),
+                'error_code' => 'not_applied',
+                'not_applied' => true,
+                'skin_messages' => $skin_messages,
+                'inventory' => null,
+            );
+            if ($version_after !== null) {
+                $response['plugin_version'] = $version_after;
+            }
+
+            return $response;
+        }
+
+        $response = array(
+            'success' => true,
+            'error' => null,
+            'not_applied' => false,
+            'inventory' => $this->inventory_collector->collect($this->site_id),
+        );
+        if ($version_after !== null) {
+            $response['plugin_version'] = $version_after;
+        }
+
+        return $response;
+    }
+
+    /**
+     * Keep a WordPress or vendor failure reason. The filesystem-credentials
+     * string is only the fallback when neither the upgrader result nor the
+     * skin reported a message.
+     *
+     * @param mixed $result
+     * @param array<int, string> $skin_messages
+     * @return array<string, mixed>
+     */
+    private function update_failed_response($result, array $skin_messages, ?string $plugin_version): array
+    {
+        $error_code = null;
+        $error_message = null;
+
+        if (is_wp_error($result)) {
+            $code = trim((string) $result->get_error_code());
+            $message = trim(wp_strip_all_tags((string) $result->get_error_message()));
+            if ($code !== '') {
+                $error_code = $code;
+            }
+            if ($message !== '') {
+                $error_message = $message;
+            }
+        }
+
+        if ($error_message === null && $skin_messages !== array()) {
+            $error_message = implode(' ', $skin_messages);
+        }
+
+        if ($error_message === null) {
+            $error_message = 'Plugin update failed. Filesystem credentials may be required.';
+            if ($error_code === null) {
+                $error_code = 'fs_credentials';
+            }
+        } elseif ($error_code === null) {
+            $error_code = 'update_failed';
+        }
+
+        $response = array(
+            'success' => false,
+            'error' => $error_message,
+            'error_code' => $error_code,
+            'not_applied' => false,
+            'skin_messages' => $skin_messages,
+            'inventory' => null,
+        );
+        if ($plugin_version !== null && $plugin_version !== '') {
+            $response['plugin_version'] = $plugin_version;
+        }
+
+        return $response;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function upgrader_skin_messages(object $skin): array
+    {
+        if (!method_exists($skin, 'get_upgrade_messages')) {
+            return array();
+        }
+
+        $messages = $skin->get_upgrade_messages();
+        if (!is_array($messages)) {
+            return array();
+        }
+
+        $clean = array();
+        foreach ($messages as $message) {
+            if (!is_scalar($message)) {
+                continue;
+            }
+            $text = trim(wp_strip_all_tags((string) $message));
+            if ($text === '') {
+                continue;
+            }
+            $clean[] = $text;
+        }
+
+        return $clean;
+    }
+
+    private function installed_plugin_version(string $plugin_file): ?string
+    {
+        if (!function_exists('get_plugins')) {
+            $path = ABSPATH . 'wp-admin/includes/plugin.php';
+            if (is_readable($path)) {
+                require_once $path;
+            }
+        }
+        if (!function_exists('get_plugins')) {
+            return null;
+        }
+
+        $plugins = get_plugins();
+        if (!is_array($plugins) || !isset($plugins[$plugin_file]) || !is_array($plugins[$plugin_file])) {
+            return null;
+        }
+
+        $version = trim(wp_strip_all_tags((string) ($plugins[$plugin_file]['Version'] ?? '')));
+
+        return $version === '' ? null : $version;
+    }
+
+    private function plugin_version_unchanged(?string $before, ?string $after): bool
+    {
+        return $before !== null && $before !== '' && $after !== null && $after !== '' && $before === $after;
+    }
+
+    private function ensure_plugin_upgrader_loaded(): void
+    {
+        if (class_exists('Plugin_Upgrader') && class_exists('Automatic_Upgrader_Skin') && function_exists('is_plugin_active')) {
+            return;
+        }
+
+        foreach (array(
+            'wp-admin/includes/plugin.php',
+            'wp-admin/includes/file.php',
+            'wp-admin/includes/misc.php',
+            'wp-admin/includes/class-wp-upgrader.php',
+        ) as $relative) {
+            $path = ABSPATH . $relative;
+            if (is_readable($path)) {
+                require_once $path;
+            }
+        }
     }
 
     private function activate_plugin(?string $plugin_file, ?string $slug): array

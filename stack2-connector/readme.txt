@@ -4,7 +4,7 @@ Tags: stack2, automation, plugin management, backup, inventory
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 1.1.20
+Stable tag: 1.1.21
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -71,6 +71,11 @@ Automatic scheduled sync relies on WP-Cron. Manual sync is available from plugin
 Stack2 Connector is not distributed on wordpress.org. It checks GitHub Releases (https://github.com/leighharro/stack2-wp/releases/latest) for new versions and integrates with WordPress's normal plugin update UI, including the built-in "Enable auto-updates" option on the Plugins page. Downloaded packages are verified against the release's published SHA256 checksum before install. Like scheduled sync, checking for updates and background auto-updates rely on WP-Cron; a manual "Check for Updates" button is available from plugin settings.
 
 == Changelog ==
+
+= 1.1.21 =
+- Plugin `update` keeps the WordPress/vendor error code, message, and upgrader skin messages. The generic filesystem-credentials error is only used when WordPress did not provide a reason.
+- Plugin `update` sets `not_applied: true` when the upgrader finishes without an error but the installed version string does not change.
+- Plugin inventory adds `update_package_available` and `upgrade_notice` from the `update_plugins` transient. Command body `refresh: true` clears that transient and runs `wp_update_plugins()` before collecting.
 
 = 1.1.20 =
 - HMAC-signed place/delete endpoints for the BatchPush restore PHP (`PUT|POST` and `DELETE /wp-json/stack2/v1/restore-script`). Writes atomically to the docroot filename `stack2-{backupId}.php` only; unsafe paths and disconnected/not-ready Connector are rejected with no half-written file. Delete is idempotent. Plugin TTL self-deletes the script after 6 hours (configurable) if Platform cannot.

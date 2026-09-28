@@ -8,6 +8,10 @@ if (!defined('WP_CONTENT_DIR')) {
     define('WP_CONTENT_DIR', rtrim(ABSPATH, '/\\') . '/wp-content');
 }
 
+if (!defined('WP_PLUGIN_DIR')) {
+    define('WP_PLUGIN_DIR', rtrim(WP_CONTENT_DIR, '/\\') . '/plugins');
+}
+
 if (!defined('HOUR_IN_SECONDS')) {
     define('HOUR_IN_SECONDS', 3600);
 }
@@ -127,9 +131,12 @@ function delete_site_transient($key)
     return delete_transient('site_' . $key);
 }
 
-function wp_update_plugins()
+function wp_update_plugins($extra_stats = array())
 {
     $GLOBALS['stack2_wp_update_plugins_calls'] = (int) ($GLOBALS['stack2_wp_update_plugins_calls'] ?? 0) + 1;
+    if (isset($GLOBALS['stack2_wp_update_plugins_impl']) && is_callable($GLOBALS['stack2_wp_update_plugins_impl'])) {
+        $GLOBALS['stack2_wp_update_plugins_impl']($extra_stats);
+    }
 }
 
 function wp_remote_get($url, $args = array())
@@ -161,12 +168,82 @@ function wp_remote_retrieve_body($response)
 
 function plugin_basename($file)
 {
-    $normalized = str_replace('\\', '/', (string) $file);
+    $normalized = wp_normalize_path((string) $file);
     if (preg_match('#/(stack2-connector/stack2-connector\.php)$#', $normalized, $matches)) {
         return $matches[1];
     }
 
+    $plugin_dir = defined('WP_PLUGIN_DIR') ? wp_normalize_path(WP_PLUGIN_DIR) : '';
+    if ($plugin_dir !== '' && str_starts_with($normalized, $plugin_dir . '/')) {
+        return ltrim(substr($normalized, strlen($plugin_dir)), '/');
+    }
+
+    $marker = 'wp-content/plugins/';
+    $position = strpos($normalized, $marker);
+    if ($position !== false) {
+        return ltrim(substr($normalized, $position + strlen($marker)), '/');
+    }
+
+    if (!str_starts_with($normalized, '/')) {
+        return ltrim($normalized, '/');
+    }
+
     return basename($normalized);
+}
+
+function get_plugins($plugin_folder = '')
+{
+    $plugins = $GLOBALS['stack2_plugins'] ?? array();
+
+    return is_array($plugins) ? $plugins : array();
+}
+
+function is_plugin_active($plugin)
+{
+    $active = $GLOBALS['stack2_active_plugins'] ?? array();
+
+    return is_array($active) && in_array((string) $plugin, $active, true);
+}
+
+function activate_plugin($plugin, $redirect = '', $network_wide = false, $silent = false)
+{
+    if (!isset($GLOBALS['stack2_active_plugins']) || !is_array($GLOBALS['stack2_active_plugins'])) {
+        $GLOBALS['stack2_active_plugins'] = array();
+    }
+    if (!in_array((string) $plugin, $GLOBALS['stack2_active_plugins'], true)) {
+        $GLOBALS['stack2_active_plugins'][] = (string) $plugin;
+    }
+
+    return null;
+}
+
+function sanitize_title($title, $fallback_title = '', $context = 'save')
+{
+    $title = strtolower(trim((string) $title));
+    $title = preg_replace('/[^a-z0-9\-_]+/', '-', $title);
+
+    return trim((string) $title, '-');
+}
+
+function wp_strip_all_tags($text, $remove_breaks = false)
+{
+    $text = preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', (string) $text);
+    $text = strip_tags((string) $text);
+    if ($remove_breaks) {
+        $text = preg_replace('/[\r\n\t ]+/', ' ', (string) $text);
+    }
+
+    return trim((string) $text);
+}
+
+function esc_url_raw($url, $protocols = null)
+{
+    return trim((string) $url);
+}
+
+function sanitize_textarea_field($text)
+{
+    return trim((string) $text);
 }
 
 function wp_clear_scheduled_hook($hook, $args = array())
@@ -394,6 +471,44 @@ class WP_REST_Server
     public const CREATABLE = 'POST';
     public const READABLE = 'GET';
     public const DELETABLE = 'DELETE';
+}
+
+class Automatic_Upgrader_Skin
+{
+    public function get_upgrade_messages()
+    {
+        $messages = $GLOBALS['stack2_upgrader_skin_messages'] ?? array();
+
+        return is_array($messages) ? $messages : array();
+    }
+}
+
+class Plugin_Upgrader
+{
+    public $skin;
+
+    public function __construct($skin = null)
+    {
+        $this->skin = $skin;
+    }
+
+    public function install($package, $args = array())
+    {
+        if (isset($GLOBALS['stack2_plugin_upgrader_install']) && is_callable($GLOBALS['stack2_plugin_upgrader_install'])) {
+            return $GLOBALS['stack2_plugin_upgrader_install']($package, $args, $this);
+        }
+
+        return false;
+    }
+
+    public function bulk_upgrade($plugins, $args = array())
+    {
+        if (isset($GLOBALS['stack2_plugin_upgrader_bulk']) && is_callable($GLOBALS['stack2_plugin_upgrader_bulk'])) {
+            return $GLOBALS['stack2_plugin_upgrader_bulk']($plugins, $args, $this);
+        }
+
+        return false;
+    }
 }
 
 class FakeWpdb

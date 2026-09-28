@@ -206,6 +206,26 @@ Job scratch files live under `wp-content/.stack2-backup/{job_id}/` (download tem
 }
 ```
 
+### Update result (1.1.21)
+
+`update` still returns `success`, `error`, and `inventory`. When the upgrader runs, the response also includes:
+
+- `not_applied` (bool) — `true` when WordPress did not return an error but the installed version string did not change. `success` is then `false`, `error_code` is `not_applied`, and `error` names the unchanged version.
+- `error_code` (string, failures only) — WordPress/vendor code when the upgrader returned `WP_Error`. Connector-only codes: `not_applied`, `update_failed` (skin message without a WP code), `fs_credentials` (no WP or skin reason; `error` stays `Plugin update failed. Filesystem credentials may be required.`).
+- `skin_messages` (string[], failures only) — `Automatic_Upgrader_Skin` feedback, tags stripped.
+- `plugin_version` (string, when the installed version could be read) — target plugin version after the attempt. This is not `installed_version` from `check_updates`, which is the Connector version.
+
+`error` is the WordPress/vendor message when one exists (for example an expired Elementor Pro license). The filesystem-credentials string is only the fallback.
+
+### Inventory package signals (1.1.21)
+
+Each plugin in `inventory.plugins` keeps the existing fields and adds:
+
+- `update_package_available` — `true` or `false` when the `update_plugins` transient has a `package` field (non-empty string means a download URL is present). `null` when WordPress has no package field for that plugin.
+- `upgrade_notice` — plain-text notice from that same transient, or `null`.
+
+Optional command body `{ "action": "inventory", "refresh": true }` deletes the `update_plugins` site transient and calls `wp_update_plugins()` before collecting. Omitted or false leaves the current transient. Scheduled inventory sync does not force a refresh.
+
 ### Disconnect (Platform-initiated)
 
 Platform should call this **while the site API key is still valid**, then tombstone the secret after a successful ack.
@@ -253,7 +273,7 @@ Platform can force WordPress to refresh the Connector update cache immediately a
 - `401 Timestamp outside allowed skew window`
   - Ensure server clocks are in sync.
 - `Plugin install/update/delete failed`
-  - WordPress may require filesystem credentials.
+  - WordPress may require filesystem credentials. For `update`, that sentence is the fallback: if WordPress or the vendor returned a reason (license, package, copy failure), `error` and `error_code` carry that reason instead.
 - `Stack2 API returned 401/403`
   - Verify Stack2 credentials in settings.
 - Sync is not running on schedule
