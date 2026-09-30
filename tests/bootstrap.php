@@ -7,7 +7,7 @@ if (!defined('STACK2_CONNECTOR_PATH')) {
 }
 
 if (!defined('STACK2_CONNECTOR_VERSION')) {
-    define('STACK2_CONNECTOR_VERSION', '1.1.21');
+    define('STACK2_CONNECTOR_VERSION', '1.1.22');
 }
 
 $plugin_includes = dirname(__DIR__) . '/stack2-connector/includes';
