@@ -226,6 +226,70 @@ Each plugin in `inventory.plugins` keeps the existing fields and adds:
 
 Optional command body `{ "action": "inventory", "refresh": true }` deletes the `update_plugins` site transient and calls `wp_update_plugins()` before collecting. Omitted or false leaves the current transient. Scheduled inventory sync does not force a refresh.
 
+### Requires Plugins and compatibility headers (1.1.22)
+
+Platform G0 reads these fields when ordering a multi-plugin update. The connector reports them and does not warn, block, or reorder updates itself.
+
+On WordPress 6.5 and newer, every plugin object includes:
+
+- `requires_plugins` — array of slugs from `WP_Plugin_Dependencies::get_dependencies( $file )` after `WP_Plugin_Dependencies::initialize()`. Plugins with no Requires Plugins header send `[]`.
+- `has_circular_dependency` — bool from `WP_Plugin_Dependencies::has_circular_dependency( $file )`.
+
+On WordPress below 6.5 both keys are omitted. They are not sent as `[]` or `false`.
+
+Dependency slugs and the circular flag are local. Collecting them does not call `api.wordpress.org` or any other WordPress.org host. `initialize()` can request the Plugin Information API when the current admin screen is `plugins.php`; inventory short-circuits that lookup for the duration of the call. An inventory command with `refresh: true` can still contact WordPress.org for the separate update check (`wp_update_plugins()`). That refresh is not used to fill these fields.
+
+Optional compatibility headers are read with `get_file_data()` from the plugin file. A key is included only when the header is present and non-empty, on every supported WordPress version:
+
+| Plugin header | JSON key |
+| --- | --- |
+| `WC requires at least` | `wc_requires_at_least` |
+| `WC tested up to` | `wc_tested_up_to` |
+| `Elementor tested up to` | `elementor_tested_up_to` |
+| `Elementor Pro tested up to` | `elementor_pro_tested_up_to` |
+
+Example plugin object (WordPress 6.5+, Stripe-style gateway):
+
+```json
+{
+  "slug": "woocommerce-gateway-stripe",
+  "file": "woocommerce-gateway-stripe/woocommerce-gateway-stripe.php",
+  "requires_plugins": ["woocommerce"],
+  "has_circular_dependency": false,
+  "wc_requires_at_least": "8.6",
+  "wc_tested_up_to": "9.4"
+}
+```
+
+#### Verify on a WooCommerce site
+
+Unit tests mock `WP_Plugin_Dependencies` and block outbound HTTP (`tests/Unit/PluginDependencyInventoryTest.php`). On a real site:
+
+1. Use WordPress 6.5 or newer with WooCommerce and a gateway whose main file contains `Requires Plugins: woocommerce` (WooCommerce Stripe Gateway or WooPayments). Optional: Elementor and Elementor Pro, to see the Elementor headers.
+2. Block WordPress.org for the request, for example with a must-use plugin:
+
+```php
+<?php
+add_filter('pre_http_request', function ($pre, $args, $url) {
+    $host = wp_parse_url((string) $url, PHP_URL_HOST);
+    if (is_string($host) && preg_match('/(^|\\.)wordpress\\.org$/i', $host)) {
+        return new WP_Error('blocked', 'outbound blocked');
+    }
+    return $pre;
+}, 1000, 3);
+```
+
+3. Collect inventory without `refresh: true`. From WP-CLI, with the connector active:
+
+```bash
+wp eval 'echo wp_json_encode( ( new Stack2_Inventory_Collector() )->collect( "verify" ), JSON_PRETTY_PRINT );'
+```
+
+Or send the signed command `{ "action": "inventory" }`.
+
+4. The gateway entry includes `requires_plugins` containing `woocommerce`, `has_circular_dependency: false`, and `wc_requires_at_least` / `wc_tested_up_to` when those headers exist. Elementor headers appear only on plugins that declare them. No request to `api.wordpress.org` is made for these fields.
+5. Repeat on WordPress 6.4 (or any release below 6.5): the same plugins omit `requires_plugins` and `has_circular_dependency`. Compatibility headers are still present when declared. A normal WooCommerce + gateway pair is not circular; a true `has_circular_dependency` requires plugins whose Requires Plugins headers cycle (including a plugin that requires its own slug).
+
 ### Disconnect (Platform-initiated)
 
 Platform should call this **while the site API key is still valid**, then tombstone the secret after a successful ack.

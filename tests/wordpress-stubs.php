@@ -53,6 +53,10 @@ $GLOBALS['stack2_options'] = array();
 $GLOBALS['stack2_cron'] = array();
 $GLOBALS['stack2_wp_update_plugins_calls'] = 0;
 $GLOBALS['stack2_http_get'] = null;
+$GLOBALS['stack2_filters'] = array();
+$GLOBALS['stack2_outbound_http_attempts'] = 0;
+$GLOBALS['stack2_plugins_api_calls'] = 0;
+$GLOBALS['stack2_file_data_calls'] = array();
 
 function trailingslashit($value)
 {
@@ -139,13 +143,172 @@ function wp_update_plugins($extra_stats = array())
     }
 }
 
-function wp_remote_get($url, $args = array())
+function add_filter($hook, $callback, $priority = 10, $accepted_args = 1)
 {
-    if (isset($GLOBALS['stack2_http_get']) && is_callable($GLOBALS['stack2_http_get'])) {
-        return $GLOBALS['stack2_http_get']($url, $args);
+    if (!isset($GLOBALS['stack2_filters'][$hook])) {
+        $GLOBALS['stack2_filters'][$hook] = array();
+    }
+    if (!isset($GLOBALS['stack2_filters'][$hook][$priority])) {
+        $GLOBALS['stack2_filters'][$hook][$priority] = array();
+    }
+    $GLOBALS['stack2_filters'][$hook][$priority][] = array(
+        'callback' => $callback,
+        'accepted_args' => (int) $accepted_args,
+    );
+
+    return true;
+}
+
+function remove_filter($hook, $callback, $priority = 10)
+{
+    if (!isset($GLOBALS['stack2_filters'][$hook][$priority])) {
+        return false;
+    }
+
+    foreach ($GLOBALS['stack2_filters'][$hook][$priority] as $index => $entry) {
+        if ($entry['callback'] === $callback) {
+            unset($GLOBALS['stack2_filters'][$hook][$priority][$index]);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function apply_filters($hook, $value, ...$args)
+{
+    $hooks = $GLOBALS['stack2_filters'][$hook] ?? array();
+    if ($hooks === array()) {
+        return $value;
+    }
+
+    ksort($hooks);
+    foreach ($hooks as $callbacks) {
+        foreach ($callbacks as $entry) {
+            $accepted = max(1, (int) ($entry['accepted_args'] ?? 1));
+            $call_args = array($value);
+            if ($accepted > 1) {
+                $call_args = array_merge($call_args, array_slice($args, 0, $accepted - 1));
+            }
+            $value = call_user_func_array($entry['callback'], $call_args);
+        }
+    }
+
+    return $value;
+}
+
+function stack2_http_preempt($args, $url)
+{
+    if (!function_exists('apply_filters')) {
+        return false;
+    }
+
+    return apply_filters('pre_http_request', false, $args, $url);
+}
+
+function stack2_remote_request($method, $url, $args = array())
+{
+    $preempt = stack2_http_preempt($args, $url);
+    if (false !== $preempt) {
+        return $preempt;
+    }
+
+    $GLOBALS['stack2_outbound_http_attempts'] = (int) ($GLOBALS['stack2_outbound_http_attempts'] ?? 0) + 1;
+    if (!isset($GLOBALS['stack2_outbound_http']) || !is_array($GLOBALS['stack2_outbound_http'])) {
+        $GLOBALS['stack2_outbound_http'] = array();
+    }
+    $GLOBALS['stack2_outbound_http'][] = array(
+        'method' => $method,
+        'url' => (string) $url,
+    );
+
+    $handler_key = $method === 'POST' ? 'stack2_http_post' : 'stack2_http_get';
+    if (isset($GLOBALS[$handler_key]) && is_callable($GLOBALS[$handler_key])) {
+        return $GLOBALS[$handler_key]($url, $args);
     }
 
     return new WP_Error('http_request_failed', 'HTTP requests are disabled in tests.');
+}
+
+function wp_remote_get($url, $args = array())
+{
+    return stack2_remote_request('GET', $url, $args);
+}
+
+function wp_remote_post($url, $args = array())
+{
+    return stack2_remote_request('POST', $url, $args);
+}
+
+/**
+ * Mirrors core enough to prove dependency collection short-circuits
+ * api.wordpress.org: the plugins_api filter runs first, and a false result
+ * falls through to an HTTP request.
+ */
+function plugins_api($action, $args = array())
+{
+    $GLOBALS['stack2_plugins_api_calls'] = (int) ($GLOBALS['stack2_plugins_api_calls'] ?? 0) + 1;
+    if (!is_object($args)) {
+        $args = (object) $args;
+    }
+
+    if (isset($GLOBALS['stack2_plugins_api_impl']) && is_callable($GLOBALS['stack2_plugins_api_impl'])) {
+        return $GLOBALS['stack2_plugins_api_impl']($action, $args);
+    }
+
+    $result = apply_filters('plugins_api', false, $action, $args);
+    if (false !== $result) {
+        return $result;
+    }
+
+    return wp_remote_post(
+        'https://api.wordpress.org/plugins/info/1.2/',
+        array(
+            'body' => array(
+                'action' => $action,
+            ),
+        )
+    );
+}
+
+function get_file_data($file, $default_headers, $context = '')
+{
+    if (!isset($GLOBALS['stack2_file_data_calls']) || !is_array($GLOBALS['stack2_file_data_calls'])) {
+        $GLOBALS['stack2_file_data_calls'] = array();
+    }
+    $GLOBALS['stack2_file_data_calls'][] = array(
+        'file' => $file,
+        'headers' => $default_headers,
+        'context' => $context,
+    );
+
+    if (isset($GLOBALS['stack2_file_data_impl']) && is_callable($GLOBALS['stack2_file_data_impl'])) {
+        return $GLOBALS['stack2_file_data_impl']($file, $default_headers, $context);
+    }
+
+    $data = array();
+    foreach ($default_headers as $field => $regex) {
+        $data[$field] = '';
+    }
+
+    if (!is_string($file) || !is_readable($file)) {
+        return $data;
+    }
+
+    $contents = file_get_contents($file, false, null, 0, 8192);
+    if (!is_string($contents) || $contents === '') {
+        return $data;
+    }
+
+    $contents = str_replace("\r", "\n", $contents);
+    foreach ($default_headers as $field => $regex) {
+        $pattern = '/^[ \t\/*#@]*' . preg_quote((string) $regex, '/') . ':(.*)$/mi';
+        if (preg_match($pattern, $contents, $match) && isset($match[1]) && trim($match[1]) !== '') {
+            $data[$field] = trim(preg_replace('/\s*(?:\*\/|\?>).*/', '', $match[1]));
+        }
+    }
+
+    return $data;
 }
 
 function wp_remote_retrieve_response_code($response)
@@ -286,7 +449,13 @@ function wp_schedule_event($timestamp, $recurrence, $hook, $args = array())
 
 function get_bloginfo($show)
 {
-    return $show === 'version' ? '6.8' : '';
+    if ($show === 'version') {
+        $version = $GLOBALS['stack2_wp_version'] ?? '6.8';
+
+        return is_string($version) ? $version : '6.8';
+    }
+
+    return '';
 }
 
 function get_site_url()

@@ -4,7 +4,7 @@ Tags: stack2, automation, plugin management, backup, inventory
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 1.1.21
+Stable tag: 1.1.22
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -71,6 +71,12 @@ Automatic scheduled sync relies on WP-Cron. Manual sync is available from plugin
 Stack2 Connector is not distributed on wordpress.org. It checks GitHub Releases (https://github.com/leighharro/stack2-wp/releases/latest) for new versions and integrates with WordPress's normal plugin update UI, including the built-in "Enable auto-updates" option on the Plugins page. Downloaded packages are verified against the release's published SHA256 checksum before install. Like scheduled sync, checking for updates and background auto-updates rely on WP-Cron; a manual "Check for Updates" button is available from plugin settings.
 
 == Changelog ==
+
+= 1.1.22 =
+- On WordPress 6.5+, plugin inventory includes `requires_plugins` (slugs from `WP_Plugin_Dependencies::get_dependencies()` after `initialize()`) and `has_circular_dependency`. Both keys are omitted on WordPress below 6.5.
+- Those dependency fields are read locally. Inventory does not call WordPress.org to fill them.
+- Optional per-plugin headers, omitted when absent: `wc_requires_at_least`, `wc_tested_up_to`, `elementor_tested_up_to`, `elementor_pro_tested_up_to`. Information only; the connector does not warn.
+- Platform G0 consumes these fields for safe multi-plugin update ordering.
 
 = 1.1.21 =
 - Plugin `update` keeps the WordPress/vendor error code, message, and upgrader skin messages. The generic filesystem-credentials error is only used when WordPress did not provide a reason.
