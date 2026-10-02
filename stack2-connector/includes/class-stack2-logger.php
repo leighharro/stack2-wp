@@ -30,6 +30,7 @@ class Stack2_Logger
         }
 
         $safe_context = $this->sanitize_context($context);
+        $message = $this->redact_package_urls($message);
         $suffix = !empty($safe_context) ? ' ' . wp_json_encode($safe_context) : '';
         error_log(sprintf('STACK2_PLUGIN [%s] %s%s', strtoupper($level), $message, $suffix));
     }
@@ -59,11 +60,31 @@ class Stack2_Logger
                 continue;
             }
 
+            if (is_string($value)) {
+                $context[$key] = $this->redact_package_urls($value);
+                continue;
+            }
+
             if (is_array($value)) {
                 $context[$key] = $this->sanitize_context($value);
             }
         }
 
         return $context;
+    }
+
+    /**
+     * Core package URLs stay out of the command log. The response may still
+     * carry Automatic_Upgrader_Skin text.
+     */
+    private function redact_package_urls(string $text): string
+    {
+        $redacted = preg_replace(
+            '#https?://(?:downloads\.wordpress\.org|downloads\.w\.org)(?:/[^\s\'"<>]*)?#i',
+            '[package-url]',
+            $text
+        );
+
+        return is_string($redacted) ? $redacted : $text;
     }
 }

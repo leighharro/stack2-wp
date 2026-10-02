@@ -7,7 +7,7 @@ if (!defined('STACK2_CONNECTOR_PATH')) {
 }
 
 if (!defined('STACK2_CONNECTOR_VERSION')) {
-    define('STACK2_CONNECTOR_VERSION', '1.1.22');
+    define('STACK2_CONNECTOR_VERSION', '1.1.23');
 }
 
 $plugin_includes = dirname(__DIR__) . '/stack2-connector/includes';
@@ -26,6 +26,7 @@ require_once $plugin_includes . '/class-stack2-backup-manager.php';
 require_once $plugin_includes . '/class-stack2-backup-api.php';
 require_once $plugin_includes . '/class-stack2-update-checker.php';
 require_once $plugin_includes . '/class-stack2-inventory-collector.php';
+require_once $plugin_includes . '/class-stack2-core-updater.php';
 require_once $plugin_includes . '/class-stack2-command-executor.php';
 require_once $plugin_includes . '/class-stack2-rest-controller.php';
 require_once $plugin_includes . '/class-stack2-plugin.php';

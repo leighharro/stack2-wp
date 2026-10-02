@@ -11,6 +11,7 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
 - Backup file stats: `POST /wp-json/stack2/v1/backups/{job_id}/files/stats`
 - Backup excluded-file catalog: `GET|POST /wp-json/stack2/v1/backups/{job_id}/files/excluded?cursor=&limit=`
 - Force Connector update check: HMAC command `check_updates`
+- Pinned WordPress core install: HMAC command `update_core`
 - Backup status endpoint: deprecated in stateless mode
 - Backup database table download endpoint: `GET /wp-json/stack2/v1/backups/{job_id}/database/table/{base64url_table_name}`
 - Backup file download endpoint: `GET /wp-json/stack2/v1/backups/{job_id}/files/{base64url_relative_path}`
@@ -19,7 +20,7 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
 - Restore script place: `PUT|POST /wp-json/stack2/v1/restore-script`
 - Restore script delete: `DELETE /wp-json/stack2/v1/restore-script`
 - HMAC SHA256 request signing and timestamp replay protection
-- Allowed commands: `install`, `update`, `activate`, `deactivate`, `delete`, `inventory`, `disconnect`, `check_updates`
+- Allowed commands: `install`, `update`, `update_core`, `activate`, `deactivate`, `delete`, `inventory`, `disconnect`, `check_updates`
 - WP-Cron scheduled sync with retry backoff for transient failures
 - Manual Sync Now button in admin settings
 - Last sync status and safe error reporting
@@ -216,6 +217,36 @@ Job scratch files live under `wp-content/.stack2-backup/{job_id}/` (download tem
 - `plugin_version` (string, when the installed version could be read) — target plugin version after the attempt. This is not `installed_version` from `check_updates`, which is the Connector version.
 
 `error` is the WordPress/vendor message when one exists (for example an expired Elementor Pro license). The filesystem-credentials string is only the fallback.
+
+### Core update (1.1.23)
+
+`update` stays a plugin update. WordPress itself is a separate command on the same endpoint.
+
+- Action: `update_core`
+- Body: `{ "action": "update_core", "version": "6.8.5" }`
+- `version` is required. It must be a numeric release, `X.Y` or `X.Y.Z`. `6.8-beta1`, `6.8-RC1`, `nightly`, and any other suffix are rejected with `error_code` `invalid_version`. A JSON number is rejected; send a string.
+
+The connector installs that exact release with `Core_Upgrader`. It does not call version-check or `get_core_updates()`, and it does not install whatever those APIs currently call newest. The offer passed to `Core_Upgrader::upgrade()` has empty `partial`, `no_content`, `new_bundled`, and `rollback` packages, so WordPress downloads the full zip. `pre_check_md5` and `attempt_rollback` are off, so a checksum mismatch cannot switch the package and a failed copy cannot install a different rollback zip.
+
+Package URL, HTTPS only, host `downloads.wordpress.org`:
+
+- `en_US` (and an empty or unsafe locale): `https://downloads.wordpress.org/release/wordpress-<version>.zip`
+- any other `get_locale()`: `https://downloads.wordpress.org/release/<locale>/wordpress-<version>.zip`
+- locale package HTTP 404 or 410, or a download failure of that locale zip: the en_US zip of the same version
+
+`downloads.w.org` is an allowed host for the same check. The connector does not build `w.org` URLs itself. The package URL is not written to the connector log. On failure the response `skin_messages` can still contain the upgrader's own download line.
+
+Success means the WordPress version on disk (`wp-includes/version.php`) equals `version`. `Core_Upgrader` / `update_core()` do not update the in-request `$wp_version` global, so the connector re-reads the file and uses that value for `installed_version` and `inventory.wp_version`. An upgrader that returns a version string, or that installs a newer release than the pin, is not success.
+
+Response fields:
+
+- `success`, `error`, `error_message` (`error_message` is the same text as `error`; the 1.1.21 field name is unchanged)
+- `not_applied` — `true` and `error_code` `not_applied` when the upgrader did not report a failure but `wp_version` did not change
+- `error_code` and `skin_messages` on failure. Connector-only codes: `invalid_version`, `not_applied`, `version_mismatch` (files changed to something other than the pin), `update_failed`, `fs_credentials`, `invalid_package`, `core_upgrader_unavailable`. A `WP_Error` from `Core_Upgrader` keeps its code.
+- `installed_version` — WordPress version after the attempt. This is not the Connector version returned by `check_updates`.
+- `inventory` — the existing inventory payload, including `wp_version`
+
+`.maintenance` is removed before the command returns, including when the upgrader throws or the version is rejected.
 
 ### Inventory package signals (1.1.21)
 
