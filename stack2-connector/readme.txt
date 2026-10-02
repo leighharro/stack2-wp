@@ -4,7 +4,7 @@ Tags: stack2, automation, plugin management, backup, inventory
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 1.1.22
+Stable tag: 1.1.23
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -71,6 +71,12 @@ Automatic scheduled sync relies on WP-Cron. Manual sync is available from plugin
 Stack2 Connector is not distributed on wordpress.org. It checks GitHub Releases (https://github.com/leighharro/stack2-wp/releases/latest) for new versions and integrates with WordPress's normal plugin update UI, including the built-in "Enable auto-updates" option on the Plugins page. Downloaded packages are verified against the release's published SHA256 checksum before install. Like scheduled sync, checking for updates and background auto-updates rely on WP-Cron; a manual "Check for Updates" button is available from plugin settings.
 
 == Changelog ==
+
+= 1.1.23 =
+- HMAC command `update_core` installs one pinned WordPress release (`X.Y` or `X.Y.Z`) with `Core_Upgrader`. Beta, RC, and nightly requests are rejected. Plugin `update` stays a plugin update.
+- The download is the full `wordpress-<version>.zip` over HTTPS from downloads.wordpress.org (downloads.w.org is allowed). The site locale is used, and the en_US zip is used when that locale has no package. Version-check is not consulted, and partial packages are not used.
+- Success means the reported `wp_version` equals the requested version. The response adds `installed_version` and `error_message` (same text as `error`) beside the 1.1.21 failure fields `error_code`, `skin_messages`, and `not_applied`.
+- `.maintenance` is removed before the command returns. Package URLs are not written to the connector log.
 
 = 1.1.22 =
 - On WordPress 6.5+, plugin inventory includes `requires_plugins` (slugs from `WP_Plugin_Dependencies::get_dependencies()` after `initialize()`) and `has_circular_dependency`. Both keys are omitted on WordPress below 6.5.

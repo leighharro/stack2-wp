@@ -222,7 +222,13 @@ function stack2_remote_request($method, $url, $args = array())
         'url' => (string) $url,
     );
 
-    $handler_key = $method === 'POST' ? 'stack2_http_post' : 'stack2_http_get';
+    if ($method === 'POST') {
+        $handler_key = 'stack2_http_post';
+    } elseif ($method === 'HEAD') {
+        $handler_key = 'stack2_http_head';
+    } else {
+        $handler_key = 'stack2_http_get';
+    }
     if (isset($GLOBALS[$handler_key]) && is_callable($GLOBALS[$handler_key])) {
         return $GLOBALS[$handler_key]($url, $args);
     }
@@ -238,6 +244,55 @@ function wp_remote_get($url, $args = array())
 function wp_remote_post($url, $args = array())
 {
     return stack2_remote_request('POST', $url, $args);
+}
+
+function wp_remote_head($url, $args = array())
+{
+    return stack2_remote_request('HEAD', $url, $args);
+}
+
+function get_locale()
+{
+    $locale = $GLOBALS['stack2_locale'] ?? 'en_US';
+
+    return is_string($locale) ? $locale : 'en_US';
+}
+
+function wp_version_check($extra_stats = array(), $force_check = false)
+{
+    $GLOBALS['stack2_wp_version_check_calls'] = (int) ($GLOBALS['stack2_wp_version_check_calls'] ?? 0) + 1;
+    if (!isset($GLOBALS['stack2_wp_version_check_args']) || !is_array($GLOBALS['stack2_wp_version_check_args'])) {
+        $GLOBALS['stack2_wp_version_check_args'] = array();
+    }
+    $GLOBALS['stack2_wp_version_check_args'][] = $extra_stats;
+
+    if (isset($GLOBALS['stack2_wp_version_check_impl']) && is_callable($GLOBALS['stack2_wp_version_check_impl'])) {
+        return $GLOBALS['stack2_wp_version_check_impl']($extra_stats, $force_check);
+    }
+
+    return get_core_updates();
+}
+
+function get_core_updates($options = array())
+{
+    $GLOBALS['stack2_get_core_updates_calls'] = (int) ($GLOBALS['stack2_get_core_updates_calls'] ?? 0) + 1;
+
+    return array(
+        (object) array(
+            'response' => 'upgrade',
+            'version' => '6.8.10',
+            'current' => '6.8.10',
+            'download' => 'https://downloads.wordpress.org/release/wordpress-6.8.10.zip',
+            'partial_version' => '6.8.2',
+            'packages' => (object) array(
+                'full' => 'https://downloads.wordpress.org/release/wordpress-6.8.10.zip',
+                'partial' => 'https://downloads.wordpress.org/release/wordpress-6.8.10-partial-1.zip',
+                'no_content' => 'https://downloads.wordpress.org/release/wordpress-6.8.10-no-content.zip',
+                'new_bundled' => 'https://downloads.wordpress.org/release/wordpress-6.8.10-new-bundled.zip',
+                'rollback' => 'https://downloads.wordpress.org/release/wordpress-6.8.10-rollback-6.8.2.zip',
+            ),
+        ),
+    );
 }
 
 /**
@@ -649,6 +704,33 @@ class Automatic_Upgrader_Skin
         $messages = $GLOBALS['stack2_upgrader_skin_messages'] ?? array();
 
         return is_array($messages) ? $messages : array();
+    }
+}
+
+class Core_Upgrader
+{
+    public $skin;
+
+    public function __construct($skin = null)
+    {
+        $this->skin = $skin;
+    }
+
+    public function upgrade($current, $args = array())
+    {
+        if (!isset($GLOBALS['stack2_core_upgrader_calls']) || !is_array($GLOBALS['stack2_core_upgrader_calls'])) {
+            $GLOBALS['stack2_core_upgrader_calls'] = array();
+        }
+        $GLOBALS['stack2_core_upgrader_calls'][] = array(
+            'current' => $current,
+            'args' => $args,
+        );
+
+        if (isset($GLOBALS['stack2_core_upgrader_upgrade']) && is_callable($GLOBALS['stack2_core_upgrader_upgrade'])) {
+            return $GLOBALS['stack2_core_upgrader_upgrade']($current, $args, $this);
+        }
+
+        return false;
     }
 }
 

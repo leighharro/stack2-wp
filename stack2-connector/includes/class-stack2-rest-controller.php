@@ -76,7 +76,7 @@ class Stack2_REST_Controller
         $plugin_file = isset($payload['plugin']) ? sanitize_text_field((string) $payload['plugin']) : null;
         $slug = isset($payload['slug']) ? sanitize_title((string) $payload['slug']) : null;
 
-        $allowed = array('install', 'update', 'activate', 'deactivate', 'delete', 'inventory', 'disconnect', 'check_updates');
+        $allowed = array('install', 'update', 'update_core', 'activate', 'deactivate', 'delete', 'inventory', 'disconnect', 'check_updates');
         if (!in_array($action, $allowed, true)) {
             return new WP_REST_Response(array(
                 'success' => false,
@@ -88,6 +88,11 @@ class Stack2_REST_Controller
         $options = array();
         if ($action === 'inventory' && array_key_exists('refresh', $payload)) {
             $options['refresh'] = $this->is_truthful_flag($payload['refresh']);
+        }
+        if ($action === 'update_core') {
+            $options['version'] = isset($payload['version']) && is_string($payload['version'])
+                ? trim($payload['version'])
+                : '';
         }
 
         $result = $this->command_executor->execute($action, $plugin_file, $slug, $options);
@@ -103,7 +108,7 @@ class Stack2_REST_Controller
             'inventory' => $result['inventory'] ?? null,
         );
 
-        foreach (array('status', 'installed_version', 'available_version', 'error_code', 'skin_messages', 'not_applied', 'plugin_version') as $key) {
+        foreach (array('status', 'installed_version', 'available_version', 'error_code', 'error_message', 'skin_messages', 'not_applied', 'plugin_version') as $key) {
             if (array_key_exists($key, $result)) {
                 $response[$key] = $result[$key];
             }

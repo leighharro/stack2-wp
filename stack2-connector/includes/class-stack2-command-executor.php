@@ -40,6 +40,9 @@ class Stack2_Command_Executor
                 case 'update':
                     return $this->update_plugin($plugin_file, $slug);
 
+                case 'update_core':
+                    return $this->update_core($options);
+
                 case 'activate':
                     return $this->activate_plugin($plugin_file, $slug);
 
@@ -413,5 +416,243 @@ class Stack2_Command_Executor
         }
 
         return null;
+    }
+
+    /**
+     * Install one pinned WordPress release. Success is reported wp_version
+     * equal to that release, not the upgrader's return string and not the
+     * newest version-check offer.
+     *
+     * @param array<string, mixed> $options
+     * @return array<string, mixed>
+     */
+    private function update_core(array $options): array
+    {
+        try {
+            return $this->perform_core_update($options);
+        } catch (Throwable $e) {
+            $this->logger->error('Core update failed.', array(
+                'action' => 'update_core',
+                'error' => $e->getMessage(),
+            ));
+
+            return $this->core_update_response(
+                false,
+                'Core update failed.',
+                'update_failed',
+                array(),
+                false,
+                $this->reported_wp_version()
+            );
+        } finally {
+            $this->remove_maintenance_file();
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $options
+     * @return array<string, mixed>
+     */
+    private function perform_core_update(array $options): array
+    {
+        $version = isset($options['version']) && is_string($options['version']) ? trim($options['version']) : '';
+        if (!Stack2_Core_Updater::is_pinned_release($version)) {
+            return $this->core_update_response(
+                false,
+                'Core update requires a pinned numeric release (X.Y or X.Y.Z).',
+                'invalid_version',
+                array(),
+                false,
+                $this->reported_wp_version()
+            );
+        }
+
+        $before = $this->reported_wp_version();
+        $attempt = (new Stack2_Core_Updater())->upgrade($version);
+        $after = $this->reported_wp_version();
+        $skin_messages = $attempt['skin_messages'];
+        $result = $attempt['result'];
+
+        if ($after === $version) {
+            return $this->core_update_response(true, null, null, array(), false, $after);
+        }
+
+        if ($after === $before) {
+            if ($this->upgrader_reported_failure($result)) {
+                return $this->core_update_failed_response($result, $skin_messages, $after);
+            }
+
+            $error = sprintf('Core update did not change the installed WordPress version (%s).', $after);
+
+            return $this->core_update_response(false, $error, 'not_applied', $skin_messages, true, $after);
+        }
+
+        $shown = $after === '' ? 'unknown' : $after;
+        $error = sprintf('Core update reported WordPress %s, not the pinned release %s.', $shown, $version);
+
+        return $this->core_update_response(false, $error, 'version_mismatch', $skin_messages, false, $after);
+    }
+
+    /**
+     * @param mixed $result
+     */
+    private function upgrader_reported_failure($result): bool
+    {
+        return is_wp_error($result) || $result === false || $result === null || $result === '';
+    }
+
+    /**
+     * @param mixed $result
+     * @param array<int, string> $skin_messages
+     * @return array<string, mixed>
+     */
+    private function core_update_failed_response($result, array $skin_messages, string $installed_version): array
+    {
+        $error_code = null;
+        $error_message = null;
+
+        if (is_wp_error($result)) {
+            $code = trim((string) $result->get_error_code());
+            $message = trim(wp_strip_all_tags((string) $result->get_error_message()));
+            if ($code !== '') {
+                $error_code = $code;
+            }
+            if ($message !== '') {
+                $error_message = $message;
+            }
+        }
+
+        if ($error_message === null && $skin_messages !== array()) {
+            $error_message = implode(' ', $skin_messages);
+        }
+
+        if ($error_message === null) {
+            $error_message = 'Core update failed. Filesystem credentials may be required.';
+            if ($error_code === null) {
+                $error_code = 'fs_credentials';
+            }
+        } elseif ($error_code === null) {
+            $error_code = 'update_failed';
+        }
+
+        return $this->core_update_response(false, $error_message, $error_code, $skin_messages, false, $installed_version);
+    }
+
+    /**
+     * @param array<int, string> $skin_messages
+     * @return array<string, mixed>
+     */
+    private function core_update_response(
+        bool $success,
+        ?string $error,
+        ?string $error_code,
+        array $skin_messages,
+        bool $not_applied,
+        string $installed_version
+    ): array {
+        $response = array(
+            'success' => $success,
+            'error' => $error,
+            'error_message' => $error,
+            'not_applied' => $not_applied,
+            'installed_version' => $installed_version,
+            'inventory' => $this->inventory_collector->collect($this->site_id),
+        );
+
+        if (!$success) {
+            $response['error_code'] = $error_code;
+            $response['skin_messages'] = $skin_messages;
+        }
+
+        return $response;
+    }
+
+    /**
+     * update_core() loads the new version.php in a local scope and leaves the
+     * request's $wp_version global on the old release. Read the file that the
+     * next request will report.
+     */
+    private function reported_wp_version(): string
+    {
+        $disk = $this->wp_version_on_disk();
+        if ($disk !== null) {
+            $GLOBALS['wp_version'] = $disk;
+            $GLOBALS['stack2_wp_version'] = $disk;
+
+            return $disk;
+        }
+
+        if (!function_exists('get_bloginfo')) {
+            return '';
+        }
+
+        $version = get_bloginfo('version');
+
+        return is_string($version) ? trim($version) : '';
+    }
+
+    private function wp_version_on_disk(): ?string
+    {
+        if (!defined('ABSPATH')) {
+            return null;
+        }
+
+        $path = rtrim((string) ABSPATH, '/\\') . '/wp-includes/version.php';
+        if (!is_readable($path)) {
+            return null;
+        }
+
+        $contents = file_get_contents($path, false, null, 0, 8192);
+        if (!is_string($contents) || $contents === '') {
+            return null;
+        }
+
+        if (!preg_match('/\$wp_version\s*=\s*([\'"])(\d+\.\d+(?:\.\d+)?)\1/', $contents, $matches)) {
+            return null;
+        }
+
+        $version = $matches[2];
+        if (!Stack2_Core_Updater::is_pinned_release($version)) {
+            return null;
+        }
+
+        return $version;
+    }
+
+    private function remove_maintenance_file(): void
+    {
+        $paths = array();
+        if (defined('ABSPATH')) {
+            $paths[] = trailingslashit((string) ABSPATH) . '.maintenance';
+        }
+
+        $filesystem = $GLOBALS['wp_filesystem'] ?? null;
+        if (is_object($filesystem) && is_callable(array($filesystem, 'abspath'))) {
+            $remote = $filesystem->abspath();
+            if (is_string($remote) && $remote !== '') {
+                $paths[] = trailingslashit($remote) . '.maintenance';
+            }
+        }
+
+        $paths = array_values(array_unique($paths));
+        foreach ($paths as $path) {
+            if (is_file($path)) {
+                @unlink($path);
+            }
+        }
+
+        if (!is_object($filesystem) || !is_callable(array($filesystem, 'delete'))) {
+            return;
+        }
+
+        foreach ($paths as $path) {
+            try {
+                $filesystem->delete($path);
+            } catch (Throwable $e) {
+                $this->logger->error('Could not remove the WordPress maintenance file.', array(
+                    'action' => 'update_core',
+                ));
+            }
+        }
     }
 }
