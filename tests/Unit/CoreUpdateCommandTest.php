@@ -69,6 +69,7 @@ class CoreUpdateCommandTest extends TestCase
         $this->assertFalse($result['not_applied']);
         $this->assertSame(self::PIN, $result['installed_version']);
         $this->assertSame(self::PIN, $result['inventory']['wp_version']);
+        $this->assertArrayNotHasKey('core_update', $result['inventory']);
         $this->assertArrayNotHasKey('error_code', $result);
         $this->assertArrayNotHasKey('plugin_version', $result);
         $this->assertSame(0, $GLOBALS['stack2_wp_version_check_calls']);

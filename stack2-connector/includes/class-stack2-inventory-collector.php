@@ -13,6 +13,9 @@ if (!defined('ABSPATH')) {
  * Optional WooCommerce and Elementor compatibility headers are included only
  * when that plugin file declares them. Dependency data is read locally:
  * collecting it does not call WordPress.org.
+ *
+ * refresh true also forces wp_version_check() and adds inventory.core_update.
+ * The key is omitted when that check does not run.
  */
 class Stack2_Inventory_Collector
 {
@@ -25,8 +28,10 @@ class Stack2_Inventory_Collector
 
     public function collect(string $site_id, bool $refresh = false): array
     {
+        $core_update = null;
         if ($refresh) {
             $this->refresh_plugin_update_check();
+            $core_update = $this->refresh_core_update_check();
         }
 
         if (!function_exists('get_plugins')) {
@@ -79,7 +84,7 @@ class Stack2_Inventory_Collector
             $plugins[] = $plugin;
         }
 
-        return array(
+        $inventory = array(
             'site_id' => $site_id,
             'site_url' => home_url('/'),
             'wp_version' => get_bloginfo('version'),
@@ -87,6 +92,12 @@ class Stack2_Inventory_Collector
             'collected_at' => gmdate('c'),
             'plugins' => $plugins,
         );
+
+        if (is_array($core_update)) {
+            $inventory['core_update'] = $core_update;
+        }
+
+        return $inventory;
     }
 
     /**
@@ -309,6 +320,140 @@ class Stack2_Inventory_Collector
 
         delete_site_transient('update_plugins');
         wp_update_plugins();
+    }
+
+    /**
+     * Force a core version check and return the offers WordPress stored.
+     *
+     * wp_version_check() skips the HTTP request for one minute unless
+     * $force_check is true. Refresh passes true so the offer list is the
+     * one WordPress just checked. The update_core transient is left in
+     * place: a failed request keeps the previous offers instead of looking
+     * like WordPress reported none.
+     *
+     * Null when the check cannot run. Callers omit core_update in that
+     * case. A failure is swallowed so this refresh still returns plugin
+     * inventory. Missing core_update means the check did not finish.
+     *
+     * @return array{checked: true, updates: array<int, array<string, mixed>>}|null
+     */
+    private function refresh_core_update_check(): ?array
+    {
+        try {
+            $this->load_core_update_api();
+            if (!function_exists('wp_version_check') || !function_exists('get_core_updates')) {
+                return null;
+            }
+
+            wp_version_check(array(), true);
+
+            return array(
+                'checked' => true,
+                'updates' => $this->normalize_core_updates(get_core_updates()),
+            );
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function load_core_update_api(): void
+    {
+        if (!function_exists('wp_version_check')) {
+            $core_file = ABSPATH . 'wp-includes/update.php';
+            if (is_readable($core_file)) {
+                require_once $core_file;
+            }
+        }
+
+        if (!function_exists('get_core_updates')) {
+            $admin_file = ABSPATH . 'wp-admin/includes/update.php';
+            if (is_readable($admin_file)) {
+                require_once $admin_file;
+            }
+        }
+    }
+
+    /**
+     * get_core_updates() returns a list of objects, or false when WordPress
+     * has no offer list. JSON keeps every public property. False and any
+     * other non-list become an empty array.
+     *
+     * @param mixed $updates
+     * @return array<int, array<string, mixed>>
+     */
+    private function normalize_core_updates($updates): array
+    {
+        if (!is_array($updates)) {
+            return array();
+        }
+
+        $rows = array();
+        foreach ($updates as $update) {
+            if (is_object($update)) {
+                $update = get_object_vars($update);
+            }
+            if (!is_array($update)) {
+                continue;
+            }
+
+            $row = $this->core_update_json_value($update);
+            if (is_array($row)) {
+                $rows[] = $row;
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param mixed $value
+     * @return mixed
+     */
+    private function core_update_json_value($value)
+    {
+        if (is_object($value)) {
+            $value = get_object_vars($value);
+        }
+        if (!is_array($value)) {
+            if (is_string($value) || is_int($value) || is_float($value) || is_bool($value) || $value === null) {
+                return $value;
+            }
+
+            return null;
+        }
+
+        $is_list = $this->is_list_array($value);
+        $normalized = array();
+        foreach ($value as $key => $item) {
+            $item = $this->core_update_json_value($item);
+            if ($is_list) {
+                $normalized[] = $item;
+                continue;
+            }
+            if (!is_string($key) || $key === '') {
+                continue;
+            }
+            $normalized[$key] = $item;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @param array<mixed> $value
+     */
+    private function is_list_array(array $value): bool
+    {
+        $expected = 0;
+        foreach ($value as $key => $unused) {
+            unset($unused);
+            if ($key !== $expected) {
+                return false;
+            }
+            $expected++;
+        }
+
+        return true;
     }
 
     /**

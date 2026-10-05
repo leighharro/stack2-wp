@@ -24,6 +24,8 @@ class ForceUpdateCheckTest extends TestCase
         );
         $GLOBALS['stack2_cron'] = array();
         $GLOBALS['stack2_wp_update_plugins_calls'] = 0;
+        $GLOBALS['stack2_wp_version_check_calls'] = 0;
+        $GLOBALS['stack2_get_core_updates_calls'] = 0;
         $GLOBALS['stack2_http_get'] = null;
     }
 
@@ -96,6 +98,8 @@ class ForceUpdateCheckTest extends TestCase
         $this->assertTrue($data['success']);
         $this->assertNull($data['error']);
         $this->assertNull($data['inventory']);
+        $this->assertSame(0, $GLOBALS['stack2_wp_version_check_calls']);
+        $this->assertSame(0, $GLOBALS['stack2_get_core_updates_calls']);
         $this->assertSame('update_available', $data['status']);
         $this->assertSame(STACK2_CONNECTOR_VERSION, $data['installed_version']);
         $this->assertSame('9.9.9', $data['available_version']);

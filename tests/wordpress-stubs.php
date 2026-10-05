@@ -265,6 +265,10 @@ function wp_version_check($extra_stats = array(), $force_check = false)
         $GLOBALS['stack2_wp_version_check_args'] = array();
     }
     $GLOBALS['stack2_wp_version_check_args'][] = $extra_stats;
+    if (!isset($GLOBALS['stack2_wp_version_check_force']) || !is_array($GLOBALS['stack2_wp_version_check_force'])) {
+        $GLOBALS['stack2_wp_version_check_force'] = array();
+    }
+    $GLOBALS['stack2_wp_version_check_force'][] = (bool) $force_check;
 
     if (isset($GLOBALS['stack2_wp_version_check_impl']) && is_callable($GLOBALS['stack2_wp_version_check_impl'])) {
         return $GLOBALS['stack2_wp_version_check_impl']($extra_stats, $force_check);
@@ -276,6 +280,14 @@ function wp_version_check($extra_stats = array(), $force_check = false)
 function get_core_updates($options = array())
 {
     $GLOBALS['stack2_get_core_updates_calls'] = (int) ($GLOBALS['stack2_get_core_updates_calls'] ?? 0) + 1;
+    if (!isset($GLOBALS['stack2_get_core_updates_args']) || !is_array($GLOBALS['stack2_get_core_updates_args'])) {
+        $GLOBALS['stack2_get_core_updates_args'] = array();
+    }
+    $GLOBALS['stack2_get_core_updates_args'][] = $options;
+
+    if (isset($GLOBALS['stack2_get_core_updates_impl']) && is_callable($GLOBALS['stack2_get_core_updates_impl'])) {
+        return $GLOBALS['stack2_get_core_updates_impl']($options);
+    }
 
     return array(
         (object) array(

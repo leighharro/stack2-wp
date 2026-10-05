@@ -24,12 +24,21 @@ class PluginUpdateSignalsTest extends TestCase
         $GLOBALS['stack2_plugin_upgrader_bulk'] = null;
         $GLOBALS['stack2_wp_update_plugins_calls'] = 0;
         $GLOBALS['stack2_wp_update_plugins_impl'] = null;
+        $GLOBALS['stack2_wp_version_check_calls'] = 0;
+        $GLOBALS['stack2_wp_version_check_args'] = array();
+        $GLOBALS['stack2_wp_version_check_force'] = array();
+        $GLOBALS['stack2_wp_version_check_impl'] = null;
+        $GLOBALS['stack2_get_core_updates_calls'] = 0;
+        $GLOBALS['stack2_get_core_updates_args'] = array();
+        $GLOBALS['stack2_get_core_updates_impl'] = null;
     }
 
     protected function tearDown(): void
     {
         $GLOBALS['stack2_plugin_upgrader_bulk'] = null;
         $GLOBALS['stack2_wp_update_plugins_impl'] = null;
+        $GLOBALS['stack2_wp_version_check_impl'] = null;
+        $GLOBALS['stack2_get_core_updates_impl'] = null;
         $GLOBALS['stack2_upgrader_skin_messages'] = array();
         parent::tearDown();
     }
@@ -129,6 +138,8 @@ class PluginUpdateSignalsTest extends TestCase
         $this->assertArrayNotHasKey('skin_messages', $result);
         $this->assertContains(self::ELEMENTOR, $GLOBALS['stack2_active_plugins']);
         $this->assertSame('3.25.0', $result['inventory']['plugins'][0]['version']);
+        $this->assertArrayNotHasKey('core_update', $result['inventory']);
+        $this->assertSame(0, $GLOBALS['stack2_wp_version_check_calls']);
     }
 
     public function test_update_without_a_wordpress_reason_keeps_filesystem_fallback(): void
@@ -250,6 +261,8 @@ class PluginUpdateSignalsTest extends TestCase
         $skipped = $this->signed_command(array('action' => 'inventory', 'refresh' => 'false'));
         $this->assertSame(200, $skipped['status_code']);
         $this->assertSame(0, $GLOBALS['stack2_wp_update_plugins_calls']);
+        $this->assertSame(0, $GLOBALS['stack2_wp_version_check_calls']);
+        $this->assertArrayNotHasKey('core_update', $skipped['body']['inventory']);
         $this->assertNull($skipped['body']['inventory']['plugins'][0]['update_package_available']);
         $this->assertNull($skipped['body']['inventory']['plugins'][0]['upgrade_notice']);
 
@@ -257,6 +270,8 @@ class PluginUpdateSignalsTest extends TestCase
         $this->assertSame(200, $refreshed['status_code']);
         $this->assertTrue($refreshed['body']['success']);
         $this->assertSame(1, $GLOBALS['stack2_wp_update_plugins_calls']);
+        $this->assertSame(1, $GLOBALS['stack2_wp_version_check_calls']);
+        $this->assertTrue($refreshed['body']['inventory']['core_update']['checked']);
     }
 
     private function install_elementor(string $version): void

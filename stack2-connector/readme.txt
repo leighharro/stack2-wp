@@ -4,7 +4,7 @@ Tags: stack2, automation, plugin management, backup, inventory
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 1.1.23
+Stable tag: 1.1.24
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -71,6 +71,10 @@ Automatic scheduled sync relies on WP-Cron. Manual sync is available from plugin
 Stack2 Connector is not distributed on wordpress.org. It checks GitHub Releases (https://github.com/leighharro/stack2-wp/releases/latest) for new versions and integrates with WordPress's normal plugin update UI, including the built-in "Enable auto-updates" option on the Plugins page. Downloaded packages are verified against the release's published SHA256 checksum before install. Like scheduled sync, checking for updates and background auto-updates rely on WP-Cron; a manual "Check for Updates" button is available from plugin settings.
 
 == Changelog ==
+
+= 1.1.24 =
+- Inventory `{ "action": "inventory", "refresh": true }` still refreshes plugin updates, and now also calls `wp_version_check()` with a forced check. The inventory object gains `core_update` (`checked: true`, and `updates` from `get_core_updates()`). An empty `updates` array means WordPress reported none.
+- `core_update` is omitted when `refresh` is not true (including scheduled sync and inventory after other commands). Plugin inventory fields are unchanged. This does not install WordPress core and does not use `check_updates`.
 
 = 1.1.23 =
 - HMAC command `update_core` installs one pinned WordPress release (`X.Y` or `X.Y.Z`) with `Core_Upgrader`. Beta, RC, and nightly requests are rejected. Plugin `update` stays a plugin update.
