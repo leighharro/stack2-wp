@@ -257,6 +257,42 @@ Each plugin in `inventory.plugins` keeps the existing fields and adds:
 
 Optional command body `{ "action": "inventory", "refresh": true }` deletes the `update_plugins` site transient and calls `wp_update_plugins()` before collecting. Omitted or false leaves the current transient. Scheduled inventory sync does not force a refresh.
 
+### Core offers on inventory refresh (1.1.24)
+
+The same command also refreshes WordPress core offers. The request body stays:
+
+```json
+{ "action": "inventory", "plugin": null, "slug": null, "refresh": true }
+```
+
+After the plugin update check, the connector calls `wp_version_check( array(), true )` and reads `get_core_updates()`. The second argument forces the check. Without it, WordPress skips the HTTP request for one minute after `last_checked`. The `update_core` transient is not deleted first, so a failed request keeps the previous offers.
+
+`check_updates` is unchanged and still checks this Connector only. `update_core` still installs one pinned release and still does not call version-check.
+
+When the check runs, `inventory` gains `core_update`:
+
+- `checked` — `true`
+- `updates` — the list returned by `get_core_updates()`, as JSON objects. Every public property is kept, including nested `packages`. An empty array means WordPress reported no offers (`false` from `get_core_updates()` is sent as `[]`). Platform reads `version`, `php_version`, and `response` from each object.
+
+```json
+{
+  "success": true,
+  "inventory": {
+    "wp_version": "6.8.2",
+    "php_version": "8.1",
+    "plugins": [],
+    "core_update": {
+      "checked": true,
+      "updates": [
+        { "version": "6.8.3", "php_version": "7.2.24", "response": "upgrade" }
+      ]
+    }
+  }
+}
+```
+
+The object in `updates` above shows the fields Platform reads. A live offer also includes the other public properties `get_core_updates()` returned, such as `download`, `locale`, and `packages`. The live inventory object also keeps `site_id`, `site_url`, and `collected_at`. `core_update` is omitted when `refresh` is omitted or not true, and when `wp_version_check()` or `get_core_updates()` cannot be called. A missing `core_update` is not "no update". A thrown core check does not fail the command; plugin inventory is still returned. Plugin objects are unchanged.
+
 ### Requires Plugins and compatibility headers (1.1.22)
 
 Platform G0 reads these fields when ordering a multi-plugin update. The connector reports them and does not warn, block, or reorder updates itself.
@@ -268,7 +304,7 @@ On WordPress 6.5 and newer, every plugin object includes:
 
 On WordPress below 6.5 both keys are omitted. They are not sent as `[]` or `false`.
 
-Dependency slugs and the circular flag are local. Collecting them does not call `api.wordpress.org` or any other WordPress.org host. `initialize()` can request the Plugin Information API when the current admin screen is `plugins.php`; inventory short-circuits that lookup for the duration of the call. An inventory command with `refresh: true` can still contact WordPress.org for the separate update check (`wp_update_plugins()`). That refresh is not used to fill these fields.
+Dependency slugs and the circular flag are local. Collecting them does not call `api.wordpress.org` or any other WordPress.org host. `initialize()` can request the Plugin Information API when the current admin screen is `plugins.php`; inventory short-circuits that lookup for the duration of the call. An inventory command with `refresh: true` can still contact WordPress.org for the separate plugin update check (`wp_update_plugins()`) and the core version check (`wp_version_check()`). That refresh is not used to fill these fields.
 
 Optional compatibility headers are read with `get_file_data()` from the plugin file. A key is included only when the header is present and non-empty, on every supported WordPress version:
 
