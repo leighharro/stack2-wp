@@ -29,7 +29,7 @@ Stack2 Connector syncs plugin inventory from WordPress to Stack2 and executes si
 ## Requirements
 
 - WordPress 6.0+
-- PHP 8.1+
+- PHP 7.4+
 
 ## Installation
 
@@ -291,7 +291,7 @@ When the check runs, `inventory` gains `core_update`:
 }
 ```
 
-The object in `updates` above shows the fields Platform reads. A live offer also includes the other public properties `get_core_updates()` returned, such as `download`, `locale`, and `packages`. The live inventory object also keeps `site_id`, `site_url`, and `collected_at`. `core_update` is omitted when `refresh` is omitted or not true, and when `wp_version_check()` or `get_core_updates()` cannot be called. A missing `core_update` is not "no update". A thrown core check does not fail the command; plugin inventory is still returned. Plugin objects are unchanged.
+The object in `updates` above shows the fields Platform reads. A live offer also includes the other public properties `get_core_updates()` returned, such as `download`, `locale`, and `packages`. The live inventory object also keeps `site_id`, `site_url`, and `collected_at`. `core_update` is omitted when `refresh` is omitted or not true, and when `wp_version_check()` or `get_core_updates()` cannot be called. A missing `core_update` is not "no update". A thrown core check does not fail the command; plugin inventory is still returned. Plugin objects are unchanged. From 1.1.25 the catch is `catch (Throwable $e)` so this file parses on PHP 7.4. The exception is discarded and the method still returns null.
 
 ### Requires Plugins and compatibility headers (1.1.22)
 

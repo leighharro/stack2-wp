@@ -351,7 +351,9 @@ class Stack2_Inventory_Collector
                 'checked' => true,
                 'updates' => $this->normalize_core_updates(get_core_updates()),
             );
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            unset($e);
+
             return null;
         }
     }
