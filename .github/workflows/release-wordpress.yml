@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*.*.*'
       - '*.*.*'
+    branches:
+      - main
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -15,8 +18,41 @@ env:
   PLUGIN_MAIN_FILE: stack2-connector/stack2-connector.php
 
 jobs:
+  lint:
+    name: Lint PHP ${{ matrix.php-version }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        php-version: ['7.4', '8.3']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up PHP ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          coverage: none
+
+      - name: Lint PHP files
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r -d '' file; do
+            if ! php -l "$file"; then
+              fail=1
+            fi
+          done < <(find stack2-connector -type f -name '*.php' -print0)
+          exit "$fail"
+
   build:
     name: Validate and Package Plugin
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
 
     outputs:
